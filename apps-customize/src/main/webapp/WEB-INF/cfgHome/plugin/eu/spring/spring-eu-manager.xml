@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE beans PUBLIC "-//SPRING//DTD BEAN//EN" "http://www.springframework.org/dtd/spring-beans.dtd">
+<beans default-autowire="byName">
+	<!-- api -->
+	<bean id="euApi" class="com.seeyon.apps.eu.api.EuApiImpl"/>
+	<!-- Config -->
+	<!-- gjx-start：2026-07-09 增加 init-method，启动时从 ConfigManager(ctp_config_item) 加载配置并推送 FileZUtil -->
+	<bean id="euConfig" class="com.seeyon.apps.eu.config.EuConfig" init-method="initFromDb"/>
+	<!-- gjx-end -->
+	<!-- manager -->
+	<bean id="euFileZManager" class="com.seeyon.apps.eu.manager.EuFileZManagerImpl"/>
+	<!-- FileZ公文套红专用管理器 -->
+	<bean id="euFileZRedManager" class="com.seeyon.apps.eu.manager.EuFileZRedManagerImpl"/>
+	<!-- 自定义控件 -->
+	<bean id="fileZCtrl" class="com.seeyon.apps.eu.fieldCtrl.FileZCtrl"/>
+	<!-- event -->
+	<bean id="watermarkEvent" class="com.seeyon.apps.eu.event.WatermarkEvent"/>
+</beans>

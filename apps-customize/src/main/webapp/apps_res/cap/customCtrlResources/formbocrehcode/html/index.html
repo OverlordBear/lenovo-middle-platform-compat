@@ -1,0 +1,75 @@
+
+
+<!DOCTYPE html>
+
+<html>
+<head>
+  <meta http-equiv="X-UA-Compatible" content="IE=EDGE">
+  <link rel="stylesheet" href="../css/relationDataCombineSetting.css"/>
+  <link rel="stylesheet" href="/seeyon/skin/dist/common/skin.css">
+  <link rel="stylesheet" href="/seeyon/common/cap4/businessRelation/css/relation.css">
+
+  <link href="/seeyon/common/skin/dist/components/components_layout.css?V=V8_1_20210920111014_26270" rel="stylesheet">
+  <link href="/seeyon/common/skin/dist/components/components_theme_default.css?V=V8_1_20210920111014_26270" rel="stylesheet">
+  <link href="/seeyon/common/ctpUi/dist/css/ctpUi.css?V=V8_1_20210920111014_26270" rel="stylesheet">
+  <link href="/seeyon/skin/dist/min/skinComponents-defaultTheme-min.css?V=V8_1_20210920111014_26270" rel="stylesheet">
+  <link rel="stylesheet" type="text/css" href="/seeyon/portal/icons/default/fonts/plane/iconfont.css?V=V8_1SP1_220402_1604100">
+  <script src="/seeyon/common/js/jquery-debug.js"></script>
+  <script type="text/javascript" charset="UTF-8" src="/seeyon/cap4/fieldDesign.do?method=headerJs"></script>
+  <script type="text/javascript" charset="UTF-8" src="/seeyon/common/cap4/common/i18n.js"></script>
+  <script src="/seeyon/common/cap4/common/underscore.js?V=V8_1_20210927201514_84685"></script>
+  <script src="/seeyon/m3/apps/v5/commons/jquery/jquery-2.1.4.min.js"></script>
+
+  <style>
+    .list{
+      height: 150px;
+    }
+    .toolbar-area {
+      margin-left: 428px;
+    }
+  </style>
+</head>
+<body class="over_hidden h100b " style="overflow: auto">
+
+</body>
+
+<script type="text/template" id="template-signInPlace_relation"> </script>
+
+</html>
+<script>
+  //打开页面需要加载的东西
+  $(function(){
+    param = initParam().params;// 获取页面参数
+    // 处理进度条
+    process = top.$.progressBar({
+      text : "加载中..."
+    });
+    var loading = false;
+    process.close();
+  });
+
+
+  /**
+   *  获取弹窗传递过来的参数
+   * @returns {*}
+   */
+  function initParam() {
+    var obj = window.parentDialogObj && (window.parentDialogObj["ctrlDialog"]);// 获取窗口对象
+    if (obj && obj.getTransParams) {
+      // 然后通过V5方法获取弹窗传递过来的参数
+      return obj.getTransParams();
+    }
+  }
+
+  /**
+   *  确定按钮调用方法，返回需要的json数据
+   * @returns {{valid: boolean, data: {}}}
+   * @constructor
+   */
+  function OK() {
+    //自定义空要的参数，如果有设置，需要自行定义数据，在运行态时自行取出来 页面设置完成后此处取值
+    const params ={}
+    return  {valid:true,data:params};
+
+  }
+</script>

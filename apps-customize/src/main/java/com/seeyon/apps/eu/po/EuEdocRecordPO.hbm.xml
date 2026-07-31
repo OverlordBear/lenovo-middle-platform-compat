@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!DOCTYPE hibernate-mapping PUBLIC
+	"-//Hibernate/Hibernate Mapping DTD//EN"
+	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
+
+<hibernate-mapping>
+<class name="com.seeyon.apps.eu.po.EuEdocRecordPO" table="eu_edoc_record">
+	<id name="id" type="long" column="id">
+		<generator class="assigned" />
+	</id>
+	<!--  -->
+	<property name="oldFileId" column="old_file_id" type="long"/>
+	<!--  -->
+	<property name="newFileId" column="new_file_id" type="long"/>
+	<!--  -->
+	<property name="taskId" column="task_id" type="string"/>
+
+</class>
+</hibernate-mapping>

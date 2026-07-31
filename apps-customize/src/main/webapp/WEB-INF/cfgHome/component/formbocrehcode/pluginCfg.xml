@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<plugin>
+    <id>formbocrehcode</id>  <!-- 这里应该对应文件夹名称-->
+    <name>对比</name>
+    <category>49641</category>
+</plugin>

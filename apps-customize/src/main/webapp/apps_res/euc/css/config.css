@@ -1,0 +1,26 @@
+input[type="text"] {
+	height: 20px;
+	line-height: 20px;
+}
+
+.common_txtbox_wrap input {
+	height: 20px;
+	line-height: 20px;
+}
+
+.only_table td {
+	height: 20px;
+	line-height: 20px;
+}
+
+.common_txtbox_wrap {
+	border: 1px solid #D4D4D4;
+}
+
+.only_table th{
+	text-align: center;
+}
+
+fieldset{
+	border-width: 1px;
+}
