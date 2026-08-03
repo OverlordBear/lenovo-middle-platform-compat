@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans>
+    <bean>
+        <id>/ruianFileZContent.do</id>
+        <methods>
+            <method>index</method>
+            <method>download</method>
+        </methods>
+    </bean>
+</beans>

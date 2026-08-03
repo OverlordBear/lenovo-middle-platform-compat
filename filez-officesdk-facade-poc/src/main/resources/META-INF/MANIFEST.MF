@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Implementation-Title: Ruian FileZ OfficeSDK Facade Read-Only View PoC
+Implementation-Version: 0.5.0
+Built-For: Seeyon A8 V10
+Integration-Mode: read-only-view

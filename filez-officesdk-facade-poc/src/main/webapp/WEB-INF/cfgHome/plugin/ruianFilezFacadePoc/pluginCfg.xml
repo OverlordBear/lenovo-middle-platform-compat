@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin>
+    <id>ruianFilezFacadePoc</id>
+    <name>瑞安 FileZ OfficeSDK Facade 只读查看验证插件 0.5.0</name>
+    <category>9999902</category>
+</plugin>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE beans PUBLIC "-//SPRING//DTD BEAN//EN" "http://www.springframework.org/dtd/spring-beans.dtd">
+<beans default-autowire="byName">
+    <bean id="ruianFileZCapabilityService"
+          class="com.ruian.filez.facade.poc.service.FilezCapabilityService"
+          init-method="warmUp"/>
+    <bean id="ruianFileZViewSessionService"
+          class="com.ruian.filez.facade.poc.service.FilezViewSessionService"/>
+    <bean id="ruianFileZViewManager"
+          class="com.ruian.filez.facade.poc.manager.RuianFileZViewManager"/>
+</beans>

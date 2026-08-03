@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans>
+    <bean>
+        <id>/ruianFileZContent.do</id>
+        <name>com.ruian.filez.facade.poc.web.FilezContentController</name>
+        <methods>
+            <method>index</method>
+            <method>download</method>
+        </methods>
+    </bean>
+</beans>
