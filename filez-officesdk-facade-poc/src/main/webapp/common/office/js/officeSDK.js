@@ -2627,7 +2627,7 @@ function _asyncToGenerator(fn) { return function () { var self = this, args = ar
    * @returns 
    */
   function getAdapterMap(params, config) {
-    var fileType = params.fileType.toLowerCase().replace(".", "");
+    var fileType = String(params && params.fileType || '').toLowerCase().replace(".", "");
     var that = this;
     var wordArray = ['docx', 'doc', 'wps'];
     var cellArray = ['xlsx', 'xls', 'et', 'ods', 'csv'];
@@ -2656,6 +2656,13 @@ function _asyncToGenerator(fn) { return function () { var self = this, args = ar
     } else if (zipArray.indexOf(fileType) > -1) {
       docType = "ZIP";
     } else {
+      var resolverOnlyMap = resolveAdapterMap(that, params || {}, {
+        key: '',
+        url: ''
+      });
+      if (resolverOnlyMap && resolverOnlyMap.key && resolverOnlyMap.url) {
+        return resolverOnlyMap;
+      }
       console.log("不支持的文件类型" + fileType + ", 请联系管理员");
       return false;
     }

@@ -15,6 +15,7 @@ import com.ruian.filez.facade.poc.config.FilezRuntimeConfig.FacadePolicy;
 import com.ruian.filez.facade.poc.service.FilezViewSessionService;
 import com.ruian.filez.facade.poc.service.FilezViewSessionService.CreateResult;
 import com.ruian.filez.facade.poc.service.FilezViewSessionService.FacadeException;
+import com.ruian.filez.facade.poc.service.FilezEditSessionService;
 import com.seeyon.ctp.common.AppContext;
 import com.seeyon.ctp.common.authenticate.domain.User;
 import com.seeyon.ctp.common.config.manager.ConfigManager;
@@ -31,6 +32,7 @@ public class RuianFileZViewManager {
 
     private final FilezRuntimeConfig runtimeConfig = new FilezRuntimeConfig();
     private FilezViewSessionService ruianFileZViewSessionService;
+    private FilezEditSessionService ruianFileZEditSessionService;
 
     @AjaxAccess
     public Map<String, Object> createViewSession(Map<String, Object> parameters) {
@@ -79,6 +81,56 @@ public class RuianFileZViewManager {
         }
     }
 
+    @AjaxAccess
+    public Map<String, Object> createEditSession(Map<String, Object> parameters) {
+        HttpServletRequest request = currentRequest();
+        if (request == null || !"POST".equalsIgnoreCase(request.getMethod())) {
+            return failure(
+                    FilezViewSessionService.CODE_METHOD_NOT_ALLOWED,
+                    "Edit session creation requires POST");
+        }
+        if (!isSameOriginWhenPresent(request)) {
+            return failure(
+                    FilezViewSessionService.CODE_FORBIDDEN,
+                    "Request origin is not allowed");
+        }
+        if (ruianFileZEditSessionService == null) {
+            return failure(
+                    FilezViewSessionService.CODE_INTERNAL,
+                    "FileZ edit facade is not initialized");
+        }
+
+        try {
+            FilezEditSessionService.CreateResult created =
+                    ruianFileZEditSessionService.createEditSession(
+                            parameters, currentUser(), request.getContextPath());
+            Map<String, Object> data = new LinkedHashMap<String, Object>();
+            data.put("editUrl", created.getEditUrl());
+            data.put("sessionId", created.getSessionId());
+            data.put("expiresAt", Long.valueOf(created.getExpiresAt()));
+            data.put("readyProtocol", "postMessage-v1");
+            data.put("saveProtocol", "postMessage-v1");
+            data.put("nonce", created.getNonce());
+            data.put("fileId", String.valueOf(created.getFileId()));
+            data.put("createdNew", Boolean.valueOf(created.isCreatedNew()));
+            data.put("contentLength", Long.valueOf(created.getContentLength()));
+
+            Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("success", Boolean.TRUE);
+            result.put("code", "OK");
+            result.put("data", data);
+            return result;
+        } catch (FilezEditSessionService.FacadeException e) {
+            LOG.warn("FileZ edit session rejected: " + e.getCode());
+            return failure(e.getCode(), e.getMessage());
+        } catch (Throwable e) {
+            LOG.error("FileZ edit session failed", e);
+            return failure(
+                    FilezViewSessionService.CODE_INTERNAL,
+                    "Unable to create FileZ edit session");
+        }
+    }
+
     /**
      * Returns only the effective policy. Connection parameters and secrets
      * are intentionally outside this administration API.
@@ -117,10 +169,11 @@ public class RuianFileZViewManager {
         String mode = (String) parameters.get("mode");
         if (!FilezRuntimeConfig.MODE_OFF.equals(mode)
                 && !FilezRuntimeConfig.MODE_SHADOW.equals(mode)
-                && !FilezRuntimeConfig.MODE_VIEW.equals(mode)) {
+                && !FilezRuntimeConfig.MODE_VIEW.equals(mode)
+                && !FilezRuntimeConfig.MODE_EDIT.equals(mode)) {
             return failure(
                     CODE_INVALID_ARGUMENT,
-                    "mode must be off, shadow, or view");
+                    "mode must be off, shadow, view, or edit");
         }
 
         try {
@@ -223,6 +276,11 @@ public class RuianFileZViewManager {
     public void setRuianFileZViewSessionService(
             FilezViewSessionService ruianFileZViewSessionService) {
         this.ruianFileZViewSessionService = ruianFileZViewSessionService;
+    }
+
+    public void setRuianFileZEditSessionService(
+            FilezEditSessionService ruianFileZEditSessionService) {
+        this.ruianFileZEditSessionService = ruianFileZEditSessionService;
     }
 
     public void setConfigManager(ConfigManager configManager) {

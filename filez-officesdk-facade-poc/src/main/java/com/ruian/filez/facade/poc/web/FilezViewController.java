@@ -69,7 +69,7 @@ public class FilezViewController extends BaseController {
             WrapperPayload payload) throws Exception {
         String cspNonce = FilezCrypto.randomToken(18);
         String sdkPath = normalizeContextPath(contextPath)
-                + "/apps_res/ruian-filez-facade-poc/filez-sdk.js?v=0.5.0";
+                + "/apps_res/ruian-filez-facade-poc/filez-sdk.js?v=0.6.1";
 
         response.setCharacterEncoding("UTF-8");
         response.setContentType("text/html;charset=UTF-8");

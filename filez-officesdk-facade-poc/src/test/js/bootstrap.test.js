@@ -13,8 +13,13 @@ const viewerPath = path.resolve(
   __dirname,
   '../../main/webapp/apps_res/ruian-filez-facade-poc/viewer.js'
 );
+const officeSdkPath = path.resolve(
+  __dirname,
+  '../../main/webapp/common/office/js/officeSDK.js'
+);
 const bootstrapText = fs.readFileSync(bootstrapPath, 'utf8');
 const viewerText = fs.readFileSync(viewerPath, 'utf8');
+const officeSdkText = fs.readFileSync(officeSdkPath, 'utf8');
 const realConsole = console;
 const quietConsole = {
   log() {},
@@ -232,7 +237,7 @@ function createEnvironment(options = {}) {
   const currentScript = createElement('script');
   currentScript.src =
     origin +
-    '/seeyon/apps_res/ruian-filez-facade-poc/bootstrap.js?v=0.5.0';
+    '/seeyon/apps_res/ruian-filez-facade-poc/bootstrap.js?v=0.6.1';
   currentScript.setAttribute(
     'data-ruian-source',
     options.source || 'GLOBAL_ENV_PC'
@@ -416,7 +421,7 @@ function createOfficeSdk(environment) {
       assert.deepStrictEqual(
         Array.from(map.url),
         [
-          '/apps_res/ruian-filez-facade-poc/viewer.js?v=0.5.0'
+          '/apps_res/ruian-filez-facade-poc/viewer.js?v=0.6.1'
         ],
         'resolver must load only the independently owned FileZ adapter'
       );
@@ -666,7 +671,7 @@ async function testLiveViewSuccessAndExactContracts() {
 
   assert.strictEqual(env.window.OfficeSDK, sdk.NativeOfficeSDK);
   assert.strictEqual(env.window.$SDK, sdk.NativeOfficeSDK);
-  assert.strictEqual(env.window.__RUIAN_FILEZ_FACADE_POC__.version, '0.5.0');
+  assert.strictEqual(env.window.__RUIAN_FILEZ_FACADE_POC__.version, '0.6.1');
 
   const instance = new env.window.OfficeSDK(wordViewParams());
   let initCallbackCount = 0;
@@ -960,7 +965,7 @@ async function testBackendFailureFallsBackToNativeOnce() {
 async function testStrictRoutesStayNative() {
   const cases = [
     { label: 'PDF', params: { fileType: 'pdf' } },
-    { label: 'Excel', params: { fileType: 'xlsx' } },
+    { label: 'PowerPoint', params: { fileType: 'pptx' } },
     { label: 'category', params: { category: 1 } },
     { label: 'dom', params: { domId: 'attachmentViewer' } },
     { label: 'edit', params: { viewMode: 'edit' }, mode: 'EDIT' },
@@ -1142,21 +1147,21 @@ async function testTopOffOverridesChildViewQuery() {
 
 async function contractNoOfficeSdkHijackAndResolverIsIdempotent() {
   assert(
-    /var VERSION = '0\.5\.0'/.test(bootstrapText) &&
-      /var VERSION = '0\.5\.0'/.test(viewerText),
-    'bootstrap and viewer must publish the same 0.5.0 contract version'
+    /var VERSION = '0\.6\.1'/.test(bootstrapText) &&
+      /var VERSION = '0\.6\.1'/.test(viewerText),
+    'bootstrap and viewer must publish the same 0.6.1 contract version'
   );
   assert(
-    /__RUIAN_FILEZ_FACADE_BRIDGE_050__/.test(bootstrapText) &&
-      /__RUIAN_FILEZ_FACADE_BRIDGE_050__/.test(viewerText) &&
-      /__RUIAN_FILEZ_VIEWER_050__/.test(bootstrapText) &&
-      /__RUIAN_FILEZ_VIEWER_050__/.test(viewerText),
-    'bootstrap and viewer must share only the 050 internal keys'
+    /__RUIAN_FILEZ_FACADE_BRIDGE_060__/.test(bootstrapText) &&
+      /__RUIAN_FILEZ_FACADE_BRIDGE_060__/.test(viewerText) &&
+      /__RUIAN_FILEZ_VIEWER_060__/.test(bootstrapText) &&
+      /__RUIAN_FILEZ_VIEWER_060__/.test(viewerText),
+    'bootstrap and viewer must share the 060 internal keys'
   );
   assert.strictEqual(
     /_040__/.test(bootstrapText + viewerText),
     false,
-    '0.5.0 runtime files must not retain 040 internal globals'
+    '0.6.1 runtime files must not retain 040 internal globals'
   );
   assert.strictEqual(
     /Object\.defineProperty\s*\(\s*window\s*,\s*['"]OfficeSDK['"]/.test(
@@ -1194,7 +1199,7 @@ async function contractNoOfficeSdkHijackAndResolverIsIdempotent() {
   assert.strictEqual(sdk.resolverQueue().length, 1);
   assert.strictEqual(
     sdk.resolverQueue()[0].name,
-    'ruian-filez-readonly-view'
+    'ruian-filez-view-edit'
   );
 
   vm.runInContext(bootstrapText, env.context, {
@@ -1218,7 +1223,7 @@ async function contractNoOfficeSdkHijackAndResolverIsIdempotent() {
   );
   assert.strictEqual(
     sdk.resolverQueue().filter(
-      (entry) => entry.name === 'ruian-filez-readonly-view'
+      (entry) => entry.name === 'ruian-filez-view-edit'
     ).length,
     1,
     'mode changes must replace the named resolver, not append duplicates'
@@ -1231,6 +1236,69 @@ async function contractNoOfficeSdkHijackAndResolverIsIdempotent() {
   assert.strictEqual(sdk.resolverQueue().length, 0);
   assert.strictEqual(env.window.OfficeSDK, originalConstructor);
   assert.strictEqual(sdk.OfficeSDK.prototype.init, originalInit);
+}
+
+function contractOfficeSdkResolverHandlesMissingDeclaredFileType() {
+  const mapStart = officeSdkText.indexOf('  function getAdapterMap(params, config) {');
+  const mapEnd = officeSdkText.indexOf('\n  /**\n   * 加载adapter', mapStart);
+  const runtimeStart = officeSdkText.indexOf(
+    '  // RUIAN-FILEZ-ADAPTER-RESOLVER-RUNTIME-BEGIN'
+  );
+  const runtimeEndMarker =
+    '  // RUIAN-FILEZ-ADAPTER-RESOLVER-RUNTIME-END';
+  const runtimeEnd =
+    officeSdkText.indexOf(runtimeEndMarker, runtimeStart) + runtimeEndMarker.length;
+  assert(mapStart >= 0 && mapEnd > mapStart);
+  assert(runtimeStart >= 0 && runtimeEnd > runtimeStart);
+
+  const context = vm.createContext({
+    console: quietConsole,
+    window: { console: quietConsole }
+  });
+  vm.runInContext(
+    [
+      "var ADAPTER_KEY={NATIVE_WORD:['/native-word.js'],NATIVE_PDF:['/native-pdf.js']};",
+      'var officeAdapterResolvers=[];',
+      officeSdkText.slice(mapStart, mapEnd),
+      officeSdkText.slice(runtimeStart, runtimeEnd),
+      'this.invoke=function(params,config,resolver){',
+      'officeAdapterResolvers=resolver?[{name:"test",resolve:resolver}]:[];',
+      'var instance={pluginKey:""};',
+      'return {map:getAdapterMap.call(instance,params,config),params:params,pluginKey:instance.pluginKey};',
+      '};'
+    ].join('\n'),
+    context,
+    { filename: officeSdkPath }
+  );
+
+  const custom = context.invoke(
+    { fileType: '', fileName: 'blank.xlsx', mode: 'EDIT' },
+    { WORD: { EDIT: 'NATIVE_WORD' }, PDF: { VIEW: 'NATIVE_PDF' } },
+    (instance, params) => {
+      params.fileType = 'xlsx';
+      return {
+        key: 'RUIAN_FILEZ_EDIT',
+        url: ['/apps_res/ruian-filez-facade-poc/editor.js']
+      };
+    }
+  );
+  assert.strictEqual(custom.map.key, 'RUIAN_FILEZ_EDIT');
+  assert.strictEqual(custom.params.fileType, 'xlsx');
+
+  const nativePdf = context.invoke(
+    { fileType: 'pdf', mode: 'VIEW' },
+    { WORD: { EDIT: 'NATIVE_WORD' }, PDF: { VIEW: 'NATIVE_PDF' } },
+    null
+  );
+  assert.strictEqual(nativePdf.map.key, 'NATIVE_PDF');
+  assert.strictEqual(nativePdf.pluginKey, 'NATIVE_PDF');
+
+  const unresolved = context.invoke(
+    { fileType: '', mode: 'EDIT' },
+    { WORD: { EDIT: 'NATIVE_WORD' }, PDF: { VIEW: 'NATIVE_PDF' } },
+    null
+  );
+  assert.strictEqual(unresolved.map, false);
 }
 
 async function contractWordViewRegistersAdapterAndReachesReadyOnce() {
@@ -1493,6 +1561,112 @@ async function contractRoutesModesAndResolverPrecision() {
   assert.strictEqual(offSdk.counters.nativeInit, 1);
 }
 
+function contractNewCollaborationEditRouting() {
+  function resolve(options = {}) {
+    const env = createEnvironment({
+      pathname: '/seeyon/collaboration/collaboration.do',
+      search: options.search || '?method=newColl',
+      serverMode: options.serverMode || 'edit'
+    });
+    const sdk = createOfficeSdk(env);
+    assignSdk(env, sdk);
+
+    const resolver = sdk.resolverQueue().find(
+      (entry) => entry && entry.name === 'ruian-filez-view-edit'
+    );
+    assert(resolver, 'the FileZ adapter resolver must be registered');
+
+    const params = wordViewParams({
+      category: 1,
+      fileId: '',
+      fileName: 'new-collaboration.docx',
+      viewMode: 'edit',
+      mode: 'EDIT',
+      ...(options.params || {})
+    });
+    const resolved = resolver.resolve(
+      { params },
+      params,
+      {
+        key: 'NATIVE',
+        url: ['/common/office/js/native-adapter.js']
+      }
+    );
+
+    return { env, params, resolved };
+  }
+
+  const edit = resolve({ serverMode: 'edit' });
+  assert(edit.resolved, 'server edit mode must resolve a FileZ adapter');
+  assert.strictEqual(edit.resolved.key, 'RUIAN_FILEZ_EDIT');
+  assert.deepStrictEqual(Array.from(edit.resolved.url), [
+    '/apps_res/ruian-filez-facade-poc/editor.js?v=0.6.1'
+  ]);
+  assert.strictEqual(edit.params.__ruianFilezSurface, 'COLLABORATION');
+  assert.strictEqual(edit.params.__ruianFilezNewDocument, true);
+
+  const preallocated = resolve({
+    params: {
+      originalFileId: '-900000000000000001',
+      originalCreateDate: '2026-08-03'
+    }
+  });
+  assert.strictEqual(
+    preallocated.resolved.key,
+    'RUIAN_FILEZ_EDIT',
+    'newColl is authoritative even when A8 preallocates original-file placeholders'
+  );
+
+  const excel = resolve({
+    params: { fileType: 'xlsx', fileName: 'new-collaboration.xlsx' }
+  });
+  assert.strictEqual(excel.resolved.key, 'RUIAN_FILEZ_EDIT');
+  assert.strictEqual(excel.params.fileType, 'xlsx');
+
+  const inferredExcel = resolve({
+    params: {
+      fileType: '',
+      contentType: '42',
+      fileName: 'new-collaboration'
+    }
+  });
+  assert.strictEqual(inferredExcel.resolved.key, 'RUIAN_FILEZ_EDIT');
+  assert.strictEqual(
+    inferredExcel.params.fileType,
+    'xls',
+    'A8 content type 42 must normalize to an Excel body extension'
+  );
+
+  assert.strictEqual(
+    resolve({ serverMode: 'view' }).resolved,
+    null,
+    'server view mode must keep a new collaboration edit on native'
+  );
+
+  const passThroughCases = [
+    {
+      label: 'template-based collaboration',
+      search: '?method=newColl&templateId=-123456789'
+    },
+    {
+      label: 'hidden initialization mode',
+      params: { viewMode: 'hidden' }
+    },
+    {
+      label: 'non-Office-body collaboration',
+      params: { fileType: 'pdf', fileName: 'new-collaboration.pdf' }
+    }
+  ];
+
+  for (const testCase of passThroughCases) {
+    assert.strictEqual(
+      resolve(testCase).resolved,
+      null,
+      `${testCase.label} must remain on the native adapter`
+    );
+  }
+}
+
 async function contractFailureFallsBackThroughBypassOnlyOnce() {
   const env = createEnvironment({
     fetch() {
@@ -1606,13 +1780,13 @@ async function contractServerViewIsAutomaticWithoutUrl() {
   assert.strictEqual(state.serverMode, 'view');
   assert.strictEqual(state.mode, 'view');
   assert.strictEqual(
-    env.window.__RUIAN_FILEZ_FACADE_BRIDGE_050__.currentServerMode(),
+    env.window.__RUIAN_FILEZ_FACADE_BRIDGE_060__.currentServerMode(),
     'view'
   );
   assert.strictEqual(
     env.window.__RUIAN_FILEZ_FACADE_BRIDGE_040__,
     undefined,
-    '0.5.0 must not reuse the 0.4.0 bridge key'
+    '0.6.1 must not reuse the 0.4.0 bridge key'
   );
   assert(badge, 'automatic view mode should render diagnostics');
   assert(
@@ -1842,7 +2016,7 @@ async function contractDuplicateBootstrapSynchronizesServerMode() {
 
   assert.strictEqual(state.duplicateLoads, 3);
   assert.strictEqual(
-    env.window.__RUIAN_FILEZ_FACADE_BRIDGE_050__.currentServerMode(),
+    env.window.__RUIAN_FILEZ_FACADE_BRIDGE_060__.currentServerMode(),
     'view'
   );
   assert(
@@ -1861,13 +2035,15 @@ async function contractDuplicateBootstrapSynchronizesServerMode() {
   await contractUrlModePrecedesStoredAndControlModes();
   await contractInvalidOrMissingServerModeFailsClosed();
   await contractDuplicateBootstrapSynchronizesServerMode();
+  contractOfficeSdkResolverHandlesMissingDeclaredFileType();
   await contractNoOfficeSdkHijackAndResolverIsIdempotent();
   await contractWordViewRegistersAdapterAndReachesReadyOnce();
   await contractChildUsesTopGovdocSurface();
   await contractRoutesModesAndResolverPrecision();
+  contractNewCollaborationEditRouting();
   await contractFailureFallsBackThroughBypassOnlyOnce();
   await contractUnsupportedVariantBypassesBeforeRequest();
-  realConsole.log('bootstrap.js + viewer.js 0.5.0 contract tests passed.');
+  realConsole.log('bootstrap.js + viewer.js 0.6.1 contract tests passed.');
 })().catch((error) => {
   realConsole.error(error);
   process.exitCode = 1;

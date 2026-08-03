@@ -22,6 +22,7 @@ public final class FilezRuntimeConfig {
     public static final String MODE_OFF = "off";
     public static final String MODE_SHADOW = "shadow";
     public static final String MODE_VIEW = "view";
+    public static final String MODE_EDIT = "edit";
 
     private static final String FILEZ_URL = "filez.fileZurl";
     private static final String OA_URL = "filez.oaUrl";
@@ -29,10 +30,12 @@ public final class FilezRuntimeConfig {
     private static final String SECRET = "filez.secret";
     private static final String WRAPPER_TTL = "filez.browserTicketTtlSeconds";
     private static final String CONTENT_TTL = "filez.contentTokenTtlSeconds";
+    private static final String EDIT_TTL = "filez.editTokenTtlSeconds";
     private static final String MAX_FILE_BYTES = "filez.maxFileBytes";
 
     private static final int DEFAULT_WRAPPER_TTL_SECONDS = 60;
     private static final int DEFAULT_CONTENT_TTL_SECONDS = 300;
+    private static final int DEFAULT_EDIT_TTL_SECONDS = 1800;
     private static final long DEFAULT_MAX_FILE_BYTES = 50L * 1024L * 1024L;
     private static final Object POLICY_WRITE_LOCK = new Object();
 
@@ -43,17 +46,26 @@ public final class FilezRuntimeConfig {
     }
 
     /**
-     * Returns the effective, fail-closed policy. A missing configuration
-     * service, a read failure, a non-exact enabled value, or an invalid mode
-     * all collapse to {@code enabled=false, mode=off}.
+     * Returns the effective server policy. A fresh installation with neither
+     * policy item present defaults to {@code enabled=true, mode=view}. Once
+     * either policy item exists, both values must be complete and canonical;
+     * an incomplete/invalid value, a missing configuration service, or a read
+     * failure still collapses to {@code enabled=false, mode=off}.
      */
     public FacadePolicy loadFacadePolicy() {
         if (configManager == null) {
             return FacadePolicy.off();
         }
         try {
-            String enabled = read(CATEGORY, ENABLED);
-            String mode = read(CATEGORY, FACADE_MODE);
+            ConfigItem enabledItem =
+                    configManager.getConfigItem(CATEGORY, ENABLED);
+            ConfigItem modeItem =
+                    configManager.getConfigItem(CATEGORY, FACADE_MODE);
+            if (enabledItem == null && modeItem == null) {
+                return FacadePolicy.view();
+            }
+            String enabled = valueOf(enabledItem);
+            String mode = valueOf(modeItem);
             if (!"true".equals(enabled) || !isValidMode(mode)) {
                 return FacadePolicy.off();
             }
@@ -68,7 +80,12 @@ public final class FilezRuntimeConfig {
     }
 
     public boolean isViewEnabled() {
-        return MODE_VIEW.equals(getEffectiveFacadeMode());
+        String mode = getEffectiveFacadeMode();
+        return MODE_VIEW.equals(mode) || MODE_EDIT.equals(mode);
+    }
+
+    public boolean isEditEnabled() {
+        return MODE_EDIT.equals(getEffectiveFacadeMode());
     }
 
     /**
@@ -132,7 +149,7 @@ public final class FilezRuntimeConfig {
             throw new ConfigException("A8 configuration service is unavailable");
         }
         if (!isViewEnabled()) {
-            throw new ConfigException("FileZ view facade is disabled");
+            throw new ConfigException("FileZ facade is disabled");
         }
 
         boolean newCategoryPresent =
@@ -154,6 +171,9 @@ public final class FilezRuntimeConfig {
         int contentTtl = parseBoundedInt(
                 read(CATEGORY, CONTENT_TTL),
                 DEFAULT_CONTENT_TTL_SECONDS, 30, 600);
+        int editTtl = parseBoundedInt(
+                read(CATEGORY, EDIT_TTL),
+                DEFAULT_EDIT_TTL_SECONDS, 300, 3600);
         long maxFileBytes = parseBoundedLong(
                 read(CATEGORY, MAX_FILE_BYTES),
                 DEFAULT_MAX_FILE_BYTES,
@@ -167,6 +187,7 @@ public final class FilezRuntimeConfig {
                 secret,
                 wrapperTtl,
                 contentTtl,
+                editTtl,
                 maxFileBytes,
                 category);
     }
@@ -179,10 +200,12 @@ public final class FilezRuntimeConfig {
 
     private String read(String category, String key) {
         ConfigItem item = configManager.getConfigItem(category, key);
-        if (item == null || item.getConfigValue() == null) {
-            return "";
-        }
-        return item.getConfigValue().trim();
+        return valueOf(item);
+    }
+
+    private static String valueOf(ConfigItem item) {
+        return item == null || item.getConfigValue() == null
+                ? "" : item.getConfigValue().trim();
     }
 
     private void write(String category, String key, String value) {
@@ -198,7 +221,8 @@ public final class FilezRuntimeConfig {
     private static boolean isValidMode(String mode) {
         return MODE_OFF.equals(mode)
                 || MODE_SHADOW.equals(mode)
-                || MODE_VIEW.equals(mode);
+                || MODE_VIEW.equals(mode)
+                || MODE_EDIT.equals(mode);
     }
 
     private static String validateBaseUrl(String value, String label)
@@ -289,6 +313,7 @@ public final class FilezRuntimeConfig {
         private final String secret;
         private final int wrapperTicketTtlSeconds;
         private final int contentTokenTtlSeconds;
+        private final int editTokenTtlSeconds;
         private final long maxFileBytes;
         private final String sourceCategory;
 
@@ -299,6 +324,7 @@ public final class FilezRuntimeConfig {
                 String secret,
                 int wrapperTicketTtlSeconds,
                 int contentTokenTtlSeconds,
+                int editTokenTtlSeconds,
                 long maxFileBytes,
                 String sourceCategory) {
             this.filezBaseUrl = filezBaseUrl;
@@ -307,6 +333,7 @@ public final class FilezRuntimeConfig {
             this.secret = secret;
             this.wrapperTicketTtlSeconds = wrapperTicketTtlSeconds;
             this.contentTokenTtlSeconds = contentTokenTtlSeconds;
+            this.editTokenTtlSeconds = editTokenTtlSeconds;
             this.maxFileBytes = maxFileBytes;
             this.sourceCategory = sourceCategory;
         }
@@ -333,6 +360,10 @@ public final class FilezRuntimeConfig {
 
         public int getContentTokenTtlSeconds() {
             return contentTokenTtlSeconds;
+        }
+
+        public int getEditTokenTtlSeconds() {
+            return editTokenTtlSeconds;
         }
 
         public long getMaxFileBytes() {
@@ -386,6 +417,16 @@ public final class FilezRuntimeConfig {
                 throw new ConfigException("OA public URL cannot form a download URL");
             }
         }
+
+        public String buildEditUploadUrl(String contextPath) throws ConfigException {
+            String downloadUrl = buildDownloadUrl(contextPath);
+            int slash = downloadUrl.lastIndexOf('/');
+            if (slash < 0) {
+                throw new ConfigException("OA public URL cannot form an upload URL");
+            }
+            return downloadUrl.substring(0, slash + 1)
+                    + "ruianFileZEditContent.do";
+        }
     }
 
     /**
@@ -403,6 +444,10 @@ public final class FilezRuntimeConfig {
 
         private static FacadePolicy off() {
             return new FacadePolicy(false, MODE_OFF);
+        }
+
+        private static FacadePolicy view() {
+            return new FacadePolicy(true, MODE_VIEW);
         }
 
         public boolean isEnabled() {

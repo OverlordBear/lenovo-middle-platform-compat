@@ -29,6 +29,7 @@ import com.seeyon.ctp.common.affair.util.AffairUtil;
 import com.seeyon.ctp.common.authenticate.domain.User;
 import com.seeyon.ctp.common.config.manager.ConfigManager;
 import com.seeyon.ctp.common.constants.ApplicationCategoryEnum;
+import com.seeyon.ctp.common.content.affair.constants.StateEnum;
 import com.seeyon.ctp.common.content.mainbody.MainbodyManager;
 import com.seeyon.ctp.common.filemanager.manager.FileManager;
 import com.seeyon.ctp.common.po.affair.CtpAffair;
@@ -57,6 +58,7 @@ public class FilezViewSessionService {
             "FILE_FORMAT_UNSUPPORTED";
     public static final String CODE_METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED";
     public static final String CODE_INTERNAL = "INTERNAL";
+    public static final String CODE_CONFLICT = "CONFLICT";
 
     private static final Set<Integer> ALLOWED_AFFAIR_APPS =
             new HashSet<Integer>(Arrays.asList(
@@ -108,10 +110,10 @@ public class FilezViewSessionService {
             throw new FacadeException(
                     CODE_FORBIDDEN, "Request is outside the read-only govdoc scope");
         }
-        if (!isWordExtension(fileType)) {
+        if (!isOfficeBodyExtension(fileType)) {
             throw new FacadeException(
                     CODE_FILE_FORMAT_UNSUPPORTED,
-                    "Only Word-format bodies are supported");
+                    "Only Word/Excel-format bodies are supported");
         }
         validationMs = elapsedMillis(checkpoint);
         checkpoint = System.nanoTime();
@@ -136,10 +138,10 @@ public class FilezViewSessionService {
         bodyMs = elapsedMillis(checkpoint);
         checkpoint = System.nanoTime();
         V3XFile file = loadFile(fileId);
-        if (!isWordBody(body, file)) {
+        if (!isSupportedOfficeBody(body, file, fileType)) {
             throw new FacadeException(
                     CODE_FILE_FORMAT_UNSUPPORTED,
-                    "The authorized body is not a Word document");
+                    "The authorized body does not match the requested Word/Excel format");
         }
         if (file.getSize() != null
                 && file.getSize().longValue() > config.getMaxFileBytes()) {
@@ -200,6 +202,82 @@ public class FilezViewSessionService {
                 + ", fileMs=" + fileMs
                 + ", capabilityMs=" + capabilityMs);
         return result;
+    }
+
+    /**
+     * Reuses the proven govdoc object checks for the independently packaged
+     * edit service.  Editing is deliberately narrower than viewing: only a
+     * current pending or wait-send affair may authorize an existing body.
+     */
+    public FileBinding authorizeExistingEditBody(
+            Map<String, Object> parameters,
+            User user) throws FacadeException {
+        requireAuthenticated(user);
+        requireDependencies();
+        if (!runtimeConfig.isEditEnabled()) {
+            throw new FacadeException(
+                    CODE_FORBIDDEN, "FileZ edit mode is disabled");
+        }
+
+        long affairId = parseSignedLong(value(parameters, "affairId"), "affairId");
+        long fileId = parseSignedLong(value(parameters, "fileId"), "fileId");
+        String fileType = normalizeFileType(value(parameters, "fileType"));
+        String category = stringValue(value(parameters, "category"));
+        String mode = stringValue(value(parameters, "mode"))
+                .toLowerCase(Locale.ENGLISH);
+        if (!"4".equals(category) || !"edit".equals(mode)) {
+            throw new FacadeException(
+                    CODE_FORBIDDEN, "Request is outside the editable govdoc scope");
+        }
+        if (!isOfficeBodyExtension(fileType)) {
+            throw new FacadeException(
+                    CODE_FILE_FORMAT_UNSUPPORTED,
+                    "Only Word/Excel-format bodies are supported");
+        }
+
+        FilezRuntimeConfig.Snapshot config = loadConfig();
+        CtpAffair affair = loadAffair(affairId);
+        authorizeAffair(affair, user);
+        Integer affairState = affair.getState();
+        if (affairState == null
+                || (affairState.intValue() != StateEnum.col_waitSend.key()
+                    && affairState.intValue() != StateEnum.col_pending.key())) {
+            throw new FacadeException(
+                    CODE_FORBIDDEN,
+                    "The current govdoc affair is not in an editable state");
+        }
+
+        Long summaryIdValue = affair.getObjectId();
+        if (summaryIdValue == null || summaryIdValue.longValue() == 0L) {
+            throw new FacadeException(CODE_FORBIDDEN, "Affair has no valid object");
+        }
+        long summaryId = summaryIdValue.longValue();
+        AuthorizedBody body = findAuthorizedBody(summaryId, fileId);
+        V3XFile file = loadFile(fileId);
+        if (!isSupportedOfficeBody(body, file, fileType)) {
+            throw new FacadeException(
+                    CODE_FILE_FORMAT_UNSUPPORTED,
+                    "The authorized body does not match the requested Word/Excel format");
+        }
+        if (file.getSize() != null
+                && file.getSize().longValue() > config.getMaxFileBytes()) {
+            throw new FacadeException(
+                    CODE_FILE_FORMAT_UNSUPPORTED,
+                    "The authorized body exceeds the edit size limit");
+        }
+
+        return new FileBinding(
+                affairId,
+                summaryId,
+                fileId,
+                chooseServerFileName(file, body, fileType),
+                file.getMimeType(),
+                body.getContentType(),
+                file.getCreateDate(),
+                file.getUpdateDate(),
+                config.getMaxFileBytes(),
+                safeUserValue(user.getName()),
+                safeUserValue(user.getLoginName()));
     }
 
     private static long elapsedMillis(long startedAt) {
@@ -371,18 +449,18 @@ public class FilezViewSessionService {
             CtpContentAll canonicalBody = null;
             int canonicalCount = 0;
             for (CtpContentAll content : contents) {
-                if (isCanonicalWordContent(content, summaryId)) {
+                if (isCanonicalOfficeContent(content, summaryId)) {
                     canonicalBody = content;
                     canonicalCount++;
                 }
             }
 
             // CtpContentAll is authoritative whenever the govdoc has any
-            // modern content rows. Requiring exactly one sort=1 Word body
+            // modern content rows. Requiring exactly one sort=1 Word/Excel body
             // prevents stale or duplicate mainbody records from authorizing a
             // file merely because its ID appeared somewhere in the history.
             if (canonicalCount == 1
-                    && matchesWordContent(canonicalBody, summaryId, fileId)) {
+                    && matchesOfficeContent(canonicalBody, summaryId, fileId)) {
                 return new AuthorizedBody(
                         String.valueOf(canonicalBody.getContentType()),
                         canonicalBody.getTitle());
@@ -421,14 +499,29 @@ public class FilezViewSessionService {
 
     private static boolean isCanonicalWordContent(
             CtpContentAll content, long summaryId) {
+        return isCanonicalBodyRecord(content, summaryId)
+                && content.getContentType() != null
+                && (content.getContentType().intValue() == 41
+                    || content.getContentType().intValue() == 43);
+    }
+
+    private static boolean isCanonicalOfficeContent(
+            CtpContentAll content, long summaryId) {
+        return isCanonicalBodyRecord(content, summaryId)
+                && content.getContentType() != null
+                && (content.getContentType().intValue() == 41
+                    || content.getContentType().intValue() == 42
+                    || content.getContentType().intValue() == 43
+                    || content.getContentType().intValue() == 44);
+    }
+
+    private static boolean isCanonicalBodyRecord(
+            CtpContentAll content, long summaryId) {
         return content != null
                 && content.getModuleId() != null
                 && content.getModuleId().longValue() == summaryId
                 && content.getModuleType() != null
                 && content.getModuleType().intValue() == ModuleType.edoc.getKey()
-                && content.getContentType() != null
-                && (content.getContentType().intValue() == 41
-                    || content.getContentType().intValue() == 43)
                 && content.getSort() != null
                 && content.getSort().intValue() == 1;
     }
@@ -436,6 +529,16 @@ public class FilezViewSessionService {
     static boolean matchesWordContent(
             CtpContentAll content, long summaryId, long fileId) {
         if (!isCanonicalWordContent(content, summaryId)) {
+            return false;
+        }
+
+        Long contentFileId = tryParseSignedLong(content.getContent());
+        return contentFileId != null && contentFileId.longValue() == fileId;
+    }
+
+    static boolean matchesOfficeContent(
+            CtpContentAll content, long summaryId, long fileId) {
+        if (!isCanonicalOfficeContent(content, summaryId)) {
             return false;
         }
 
@@ -491,30 +594,35 @@ public class FilezViewSessionService {
         }
     }
 
-    private static boolean isWordBody(AuthorizedBody body, V3XFile file) {
-        String bodyType = body.getContentType() == null
-                ? "" : body.getContentType().trim();
-        if (!"41".equals(bodyType)
-                && !"43".equals(bodyType)
-                && !"OfficeWord".equalsIgnoreCase(bodyType)
-                && !"WpsWord".equalsIgnoreCase(bodyType)) {
+    private static boolean isSupportedOfficeBody(
+            AuthorizedBody body, V3XFile file, String requestedFileType) {
+        return matchesOfficeFamily(
+                body.getContentType(),
+                file.getFilename(),
+                file.getMimeType(),
+                requestedFileType);
+    }
+
+    static boolean matchesOfficeFamily(
+            String bodyType,
+            String fileName,
+            String mimeType,
+            String requestedFileType) {
+        int bodyFamily = familyForBodyType(bodyType);
+        int requestedFamily = familyForFileType(requestedFileType);
+        if (bodyFamily == 0 || bodyFamily != requestedFamily) {
             return false;
         }
 
         // Filename and MIME metadata may confirm a body already authorized by
-        // A8's content type, but can never turn another content type into Word.
-        String fileName = file.getFilename() == null
-                ? "" : file.getFilename().toLowerCase(Locale.ENGLISH);
-        if (fileName.endsWith(".doc")
-                || fileName.endsWith(".docx")
-                || fileName.endsWith(".wps")) {
-            return true;
+        // A8's content type, but can never turn another family into a match.
+        int fileNameFamily = familyForFileName(fileName);
+        int mimeFamily = familyForMime(mimeType);
+        if ((fileNameFamily != 0 && fileNameFamily != bodyFamily)
+                || (mimeFamily != 0 && mimeFamily != bodyFamily)) {
+            return false;
         }
-        String mime = file.getMimeType() == null
-                ? "" : file.getMimeType().toLowerCase(Locale.ENGLISH);
-        return "application/msword".equals(mime)
-                || mime.contains("wordprocessingml")
-                || mime.contains("wps");
+        return fileNameFamily == bodyFamily || mimeFamily == bodyFamily;
     }
 
     private static String chooseServerFileName(
@@ -526,21 +634,9 @@ public class FilezViewSessionService {
         if (name.length() == 0) {
             name = "document";
         }
-        String lower = name.toLowerCase(Locale.ENGLISH);
-        if (!lower.endsWith(".doc")
-                && !lower.endsWith(".docx")
-                && !lower.endsWith(".wps")) {
-            String bodyType = body.getContentType() == null
-                    ? "" : body.getContentType().trim();
-            if ("43".equals(bodyType)
-                    || "WpsWord".equalsIgnoreCase(bodyType)) {
-                name += ".wps";
-            } else if ("41".equals(bodyType)
-                    || "OfficeWord".equalsIgnoreCase(bodyType)) {
-                name += ".docx";
-            } else {
-                name += "." + requestedFileType;
-            }
+        int bodyFamily = familyForBodyType(body.getContentType());
+        if (familyForFileName(name) != bodyFamily) {
+            name += defaultExtension(body.getContentType(), requestedFileType);
         }
         if (name.length() > 180) {
             name = name.substring(name.length() - 180);
@@ -574,8 +670,76 @@ public class FilezViewSessionService {
         return result;
     }
 
-    private static boolean isWordExtension(String value) {
-        return "doc".equals(value) || "docx".equals(value) || "wps".equals(value);
+    private static boolean isOfficeBodyExtension(String value) {
+        return familyForFileType(value) != 0;
+    }
+
+    private static int familyForBodyType(String value) {
+        String bodyType = value == null ? "" : value.trim();
+        if ("41".equals(bodyType)
+                || "43".equals(bodyType)
+                || "OfficeWord".equalsIgnoreCase(bodyType)
+                || "WpsWord".equalsIgnoreCase(bodyType)) {
+            return 1;
+        }
+        if ("42".equals(bodyType)
+                || "44".equals(bodyType)
+                || "OfficeExcel".equalsIgnoreCase(bodyType)
+                || "WpsExcel".equalsIgnoreCase(bodyType)) {
+            return 2;
+        }
+        return 0;
+    }
+
+    private static int familyForFileType(String value) {
+        if ("doc".equals(value) || "docx".equals(value) || "wps".equals(value)) {
+            return 1;
+        }
+        if ("xls".equals(value) || "xlsx".equals(value) || "et".equals(value)) {
+            return 2;
+        }
+        return 0;
+    }
+
+    private static int familyForFileName(String value) {
+        String fileName = value == null
+                ? "" : value.toLowerCase(Locale.ENGLISH).trim();
+        int dot = fileName.lastIndexOf('.');
+        return dot < 0 ? 0 : familyForFileType(fileName.substring(dot + 1));
+    }
+
+    private static int familyForMime(String value) {
+        String mime = value == null
+                ? "" : value.toLowerCase(Locale.ENGLISH).trim();
+        if (mime.contains("spreadsheet")
+                || mime.contains("ms-excel")
+                || mime.contains("wps-office.et")
+                || mime.contains("kingsoft.et")) {
+            return 2;
+        }
+        if (mime.contains("wordprocessing")
+                || mime.contains("msword")
+                || mime.contains("ms-word")
+                || mime.contains("wps-office.wps")
+                || mime.contains("kingsoft.writer")) {
+            return 1;
+        }
+        return 0;
+    }
+
+    private static String defaultExtension(
+            String bodyTypeValue, String requestedFileType) {
+        String bodyType = bodyTypeValue == null ? "" : bodyTypeValue.trim();
+        if ("43".equals(bodyType) || "WpsWord".equalsIgnoreCase(bodyType)) {
+            return ".wps";
+        }
+        if ("44".equals(bodyType) || "WpsExcel".equalsIgnoreCase(bodyType)) {
+            return ".et";
+        }
+        if (familyForBodyType(bodyType) == 2) {
+            return "xls".equals(requestedFileType) ? ".xls" : ".xlsx";
+        }
+        return "doc".equals(requestedFileType) ? ".doc" : ".docx";
     }
 
     private static Object value(Map<String, Object> parameters, String key)

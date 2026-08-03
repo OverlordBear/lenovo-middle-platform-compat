@@ -8,4 +8,12 @@
             <method>download</method>
         </methods>
     </bean>
+    <bean>
+        <id>/ruianFileZEditContent.do</id>
+        <name>com.ruian.filez.facade.poc.web.FilezEditContentController</name>
+        <methods>
+            <method>index</method>
+            <method>upload</method>
+        </methods>
+    </bean>
 </beans>

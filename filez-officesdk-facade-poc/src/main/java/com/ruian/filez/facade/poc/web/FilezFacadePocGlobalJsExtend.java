@@ -17,7 +17,7 @@ import javax.servlet.http.HttpServletRequest;
  */
 public final class FilezFacadePocGlobalJsExtend implements GlobalJsExtend {
 
-    public static final String VERSION = "0.5.0";
+    public static final String VERSION = "0.6.1";
     private static final String RESOURCE_PATH =
             "/apps_res/ruian-filez-facade-poc/bootstrap.js?v=" + VERSION;
 

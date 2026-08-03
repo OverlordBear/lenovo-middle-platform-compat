@@ -18,6 +18,8 @@ public class FilezCapabilityService {
     private static final int MAX_ACTIVE_CAPABILITIES = 4096;
     private static final int TOKEN_BYTES = 32;
     private static final int CONTENT_MAX_USES = 3;
+    private static final int EDIT_DOWNLOAD_MAX_USES = 16;
+    private static final int EDIT_UPLOAD_MAX_USES = 64;
 
     private final ConcurrentHashMap<String, Grant> grants =
             new ConcurrentHashMap<String, Grant>();
@@ -62,6 +64,64 @@ public class FilezCapabilityService {
         return issue(grant);
     }
 
+    public IssuedCapability issueEditWrapper(
+            FileBinding binding,
+            long userId,
+            String sessionId,
+            String nonce,
+            int ttlSeconds) throws CapabilityException {
+        long expiresAt = expiry(ttlSeconds);
+        Grant grant = new Grant(
+                Purpose.EDIT_WRAPPER,
+                binding,
+                Long.valueOf(userId),
+                sessionId,
+                nonce,
+                expiresAt,
+                1);
+        return issue(grant);
+    }
+
+    public IssuedCapability issueEditDownload(
+            Grant wrapperGrant,
+            int ttlSeconds) throws CapabilityException {
+        return issueEditCapability(
+                wrapperGrant,
+                Purpose.EDIT_DOWNLOAD,
+                ttlSeconds,
+                EDIT_DOWNLOAD_MAX_USES);
+    }
+
+    public IssuedCapability issueEditUpload(
+            Grant wrapperGrant,
+            int ttlSeconds) throws CapabilityException {
+        return issueEditCapability(
+                wrapperGrant,
+                Purpose.EDIT_UPLOAD,
+                ttlSeconds,
+                EDIT_UPLOAD_MAX_USES);
+    }
+
+    private IssuedCapability issueEditCapability(
+            Grant wrapperGrant,
+            Purpose purpose,
+            int ttlSeconds,
+            int maxUses) throws CapabilityException {
+        if (wrapperGrant == null
+                || wrapperGrant.getPurpose() != Purpose.EDIT_WRAPPER) {
+            throw new CapabilityException("Invalid edit wrapper capability");
+        }
+        Grant grant = new Grant(
+                purpose,
+                wrapperGrant.getBinding(),
+                null,
+                wrapperGrant.getSessionId(),
+                wrapperGrant.getNonce(),
+                expiry(ttlSeconds),
+                maxUses);
+        return issue(grant);
+    }
+
     public Grant consumeWrapper(String rawToken, long currentUserId) {
         return consume(
                 rawToken, Purpose.WRAPPER, Long.valueOf(currentUserId));
@@ -69,6 +129,19 @@ public class FilezCapabilityService {
 
     public Grant consumeContent(String rawToken) {
         return consume(rawToken, Purpose.CONTENT, null);
+    }
+
+    public Grant consumeEditWrapper(String rawToken, long currentUserId) {
+        return consume(
+                rawToken, Purpose.EDIT_WRAPPER, Long.valueOf(currentUserId));
+    }
+
+    public Grant consumeEditDownload(String rawToken) {
+        return consume(rawToken, Purpose.EDIT_DOWNLOAD, null);
+    }
+
+    public Grant consumeEditUpload(String rawToken) {
+        return consume(rawToken, Purpose.EDIT_UPLOAD, null);
     }
 
     public String newSessionId() {
@@ -160,7 +233,10 @@ public class FilezCapabilityService {
 
     public enum Purpose {
         WRAPPER,
-        CONTENT
+        CONTENT,
+        EDIT_WRAPPER,
+        EDIT_DOWNLOAD,
+        EDIT_UPLOAD
     }
 
     public static final class FileBinding {

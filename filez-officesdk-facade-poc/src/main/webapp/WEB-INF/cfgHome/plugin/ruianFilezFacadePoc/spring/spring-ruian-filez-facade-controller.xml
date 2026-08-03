@@ -5,4 +5,8 @@
           class="com.ruian.filez.facade.poc.web.FilezViewController"/>
     <bean name="/ruianFileZContent.do"
           class="com.ruian.filez.facade.poc.web.FilezContentController"/>
+    <bean name="/ruianFileZEdit.do"
+          class="com.ruian.filez.facade.poc.web.FilezEditController"/>
+    <bean name="/ruianFileZEditContent.do"
+          class="com.ruian.filez.facade.poc.web.FilezEditContentController"/>
 </beans>

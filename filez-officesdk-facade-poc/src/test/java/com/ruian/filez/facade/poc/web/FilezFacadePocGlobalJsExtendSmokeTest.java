@@ -32,7 +32,7 @@ public final class FilezFacadePocGlobalJsExtendSmokeTest {
         String pc = extension.getJsSegment(request);
         assertContains(
                 pc,
-                "/seeyon/apps_res/ruian-filez-facade-poc/bootstrap.js?v=0.5.0"
+                "/seeyon/apps_res/ruian-filez-facade-poc/bootstrap.js?v=0.6.1"
         );
         assertContains(pc, "GLOBAL_ENV_PC");
         assertContains(pc, "ruian-filez-facade-poc-bootstrap");
@@ -46,10 +46,44 @@ public final class FilezFacadePocGlobalJsExtendSmokeTest {
         String noRequest = extension.getJsSegment(null);
         assertContains(
                 noRequest,
-                "/apps_res/ruian-filez-facade-poc/bootstrap.js?v=0.5.0"
+                "/apps_res/ruian-filez-facade-poc/bootstrap.js?v=0.6.1"
         );
 
-        assertFailClosed(new LinkedHashMap<String, String>(), false);
+        assertMode(
+                new LinkedHashMap<String, String>(),
+                false,
+                FilezRuntimeConfig.MODE_VIEW);
+
+        Map<String, String> edit = new LinkedHashMap<String, String>();
+        edit.put(
+                TestConfigManager.key(
+                        FilezRuntimeConfig.CATEGORY,
+                        FilezRuntimeConfig.ENABLED),
+                "true");
+        edit.put(
+                TestConfigManager.key(
+                        FilezRuntimeConfig.CATEGORY,
+                        FilezRuntimeConfig.FACADE_MODE),
+                FilezRuntimeConfig.MODE_EDIT);
+        assertMode(edit, false, FilezRuntimeConfig.MODE_EDIT);
+
+        Map<String, String> enabledOnly =
+                new LinkedHashMap<String, String>();
+        enabledOnly.put(
+                TestConfigManager.key(
+                        FilezRuntimeConfig.CATEGORY,
+                        FilezRuntimeConfig.ENABLED),
+                "true");
+        assertFailClosed(enabledOnly, false);
+
+        Map<String, String> modeOnly =
+                new LinkedHashMap<String, String>();
+        modeOnly.put(
+                TestConfigManager.key(
+                        FilezRuntimeConfig.CATEGORY,
+                        FilezRuntimeConfig.FACADE_MODE),
+                FilezRuntimeConfig.MODE_VIEW);
+        assertFailClosed(modeOnly, false);
 
         Map<String, String> invalid = new LinkedHashMap<String, String>();
         invalid.put(
@@ -72,12 +106,19 @@ public final class FilezFacadePocGlobalJsExtendSmokeTest {
 
     private static void assertFailClosed(
             Map<String, String> values, boolean failReads) {
+        assertMode(values, failReads, FilezRuntimeConfig.MODE_OFF);
+    }
+
+    private static void assertMode(
+            Map<String, String> values,
+            boolean failReads,
+            String expectedMode) {
         FilezFacadePocGlobalJsExtend extension =
                 new FilezFacadePocGlobalJsExtend(
                         TestConfigManager.create(values, null, failReads));
         assertContains(
                 extension.getJsSegment(requestWithContextPath("/seeyon")),
-                "var mode='off'");
+                "var mode='" + expectedMode + "'");
     }
 
     private static HttpServletRequest requestWithContextPath(

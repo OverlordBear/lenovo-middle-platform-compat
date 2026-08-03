@@ -1,310 +1,211 @@
-# FileZ OfficeSDK Facade 只读查看 PoC
+# FileZ OfficeSDK Facade PoC
 
-版本：`0.5.0`
+版本：`0.6.1`
 
-本项目用于验证一条适合长期维护的低侵入集成路径：不修改公文 Vue
-业务源码和标准 JAR，只对致远 `common/office/js/officeSDK.js` 增加一个
-通用、失败后自动回到原生映射的适配器解析扩展点，其余 FileZ 代码全部放在
-独立插件中。FileZ 仅替代明确命中的 Word 正文查看场景。
+这是致远 A8 V10 的低侵入 FileZ 查看/编辑验证插件。它不修改协同、公文、
+文档中心 Vue 业务源码，也不修改致远核心 JAR；FileZ 逻辑位于独立插件中。
+唯一需要覆盖的致远标准文件是 `common/office/js/officeSDK.js`，其中只保留一个
+通用、命名、可注销并可回退的 Adapter Resolver 扩展点。
 
-## 已确认的空白正文根因
+当前代码已通过 JDK 8 编译、三组 Java 冒烟测试、Bootstrap/Viewer、Editor
+和后台内嵌页签合同测试，尚未由 Codex 部署到 A8，也尚未完成真实编辑保存现场验收。
 
-失败请求不是正文权限校验失败，也不是数据库查询失败。浏览器侧旧实现把
-会话创建请求的超时固定为 `10,000 ms`，而一次实际
-`ruianFileZViewManager.createViewSession` 请求在后端成功返回前耗时
-`20,557 ms`。浏览器在成功结果返回前已经放弃 FileZ 并进入致远原生插件
-回退，随后原生插件又因不支持 `pdf/docx` 打开而显示空白。
+## 为什么不需要修改业务源码
 
-`0.4.0` 将该问题与长期接入方式一起修正：会话等待窗口覆盖已观测的首次
-调用耗时，后端记录分段耗时；FileZ 驱动回调地址遵循当前官方 SDK/服务的
-无查询串回调契约；OfficeSDK 通过正式注册的独立适配器解析器加载，不再
-依赖运行时改写 `OfficeSDK.prototype`。
+这里的“低侵入”是指不修改公文、协同、文档中心的 Vue/Java 业务源码，并非
+完全不覆盖任何致远文件：
 
-`0.5.0` 取消了“每次在地址后追加 `filezFacade=view`”的依赖。A8 后端
-`ConfigManager` 是唯一的启用权威：只有 `ruian_filez_view` 分类同时存在
-`filez.enabled=true` 和 `filez.facadeMode=view` 时，新打开的页面才会自动
-进入 FileZ 只读查看。浏览器 URL、`sessionStorage` 和控制台 API 只能把
-服务端模式降为 `shadow/off`，不能把服务端 `off/shadow` 提升为 `view`。
+1. A8 的 `GlobalJsExtend` 扩展点从独立 JAR 向 PC 页面加载 `bootstrap.js`；
+2. `bootstrap.js` 根据页面、正文类型、模式和服务端开关注册 FileZ Resolver；
+3. 标准 `officeSDK.js` 只增加一个通用 Adapter Resolver 插槽，命中时加载
+   FileZ Adapter，不命中或失败时仍回到致远原生 Adapter；
+4. 查看、编辑、保存、鉴权、配置接口全部位于独立 JAR 和独立 `apps_res` 目录。
 
-本包内置从当前 FileZ 服务取得的官方 Web SDK `1.8.2`，文件大小
-`129,606` 字节，固定 SHA-256 为
-`C00711BB7D85576850E4A93AADA5568C16E7A8453A04799C781F28F328A378F4`。
-测试、部署和部署后校验都会同时检查版本声明与/或该哈希，防止 SDK 被静默
-替换。
+所以致远业务模块升级不会直接覆盖 FileZ 实现；需要维护的唯一标准文件侵入点
+是 `officeSDK.js` 中带 `RUIAN-FILEZ-ADAPTER-RESOLVER-*` 标记的小段代码。
+
+## 组件
+
+```text
+RUIAN_FILEZ_VIEW  -> viewer.js  -> 公文 Word/Excel 查看
+RUIAN_FILEZ_EDIT  -> editor.js  -> Word/Excel 新建、编辑和保存
+```
+
+`bootstrap.js` 注册 `ruian-filez-view-edit` Resolver，只在白名单范围内选择
+上述 Adapter；不命中、关闭或安全回退时继续使用致远原生 Adapter。
+
+## 后台开关
+
+部署后，以系统管理员进入：
+
+```text
+系统设置 -> 流版签设置 -> FileZ 集成设置
+```
+
+可选择：
+
+- `off`：关闭 FileZ，全部回到致远原生厂商；
+- `shadow`：只记录路由判定；
+- `view`：只接管已验证的 Word/Excel 正文查看；
+- `edit`：在当前白名单内启用 FileZ 查看与编辑。
+
+全新安装默认 `view`，现场验证编辑前不会自动提升到 `edit`。策略保存在
+`ruian_filez_view` 分类的 `filez.enabled` 和 `filez.facadeMode` 中。后台接口
+只接受同源 POST、A8 登录态和系统管理员身份。
+
+该入口以内嵌页签形式复用致远原生“修改/保存/取消”按钮，不再弹窗。它是
+FileZ 自己的管理入口，不会修改上方致远原生的“在线编辑插件”
+单选项。V10 的原生厂商列表由固定枚举、固定配置聚合和 JSP 组成，没有公开
+第三方 Provider SPI；把 FileZ 强行加入该列表需要修改核心 JAR/JSP，会重新
+制造升级覆盖问题。原生厂商配置继续作为 FileZ 未接管场景的回退选择。
+
+## 当前业务范围
+
+| 场景 | 行为 |
+|---|---|
+| 公文已有 Word/Excel 正文查看 | FileZ View |
+| 公文已有待发/待办 Word/Excel 正文编辑 | FileZ Edit |
+| 新建普通公文 Word/Excel 正文 | FileZ Edit |
+| 新建普通协同 Word/Excel 正文 | FileZ Edit；兼容协同隐藏签章预检和 `modifyContent` |
+| 文档中心新建普通 Word/Excel 文档 | FileZ Edit |
+| 已有协同/已有文档中心正文编辑 | 原生，尚未补齐对象级 ACL |
+| 模板、转 Office、原始文件派生的新建 | 原生 |
+| PDF/OFD/PPT、ODS/CSV、打印及非白名单隐藏打开 | 原生 |
+| 套红、清稿、转 PDF、签章等高级能力 | 原生或显式 `UNSUPPORTED` |
+| M3/移动端 | 原生 |
+
+## 保存合同
+
+新建正文的 `fileId` 由服务端生成，先调用
+`OfficeFileManager.createV3XFileAndDefaultBlankFile(...)` 建立 A8 文件，再由
+`editor.js` 回写 `contentAPI` 的 `fileId/id/contentDataId`。
+
+FileZ 上传后通过 `OfficeFileManager.controlAfterSave(...)` 提交到 A8 文件
+生命周期，不直接覆盖物理文件。OfficeSDK 的 `saveFile` 只有在以下条件全部
+满足后才成功：
+
+1. FileZ 上传 capability、会话、nonce、文件 ID、后缀和大小合法；
+2. A8 当前 `V3XFile` 没有发生并发版本漂移；
+3. `controlAfterSave` 返回同一 canonical `fileId`；
+4. 服务端 revision 递增；
+5. wrapper 返回匹配 `requestId` 的 `SAVE_RESULT`，包含
+   `fileId/revision/contentLength`。
+
+`SAVE_REQUESTED`、FileZ 本地 `save()` 返回和关闭 iframe 都不是保存成功。
+每次保存会先读取实时 revision，再触发 FileZ 保存，再等待新 revision，避免把
+此前的自动保存误判成本次保存。当前不支持 Save As。
 
 ## 安全边界
 
-- 默认模式为 `off`；开关缺失、非法、读取异常或未显式启用时均不接管；
-- 旧 `eu_filez_config` 只兼容提供 FileZ 连接参数，不能代表启用；
-- 每次会话创建、wrapper 打开和正文 capability 消费都重新检查服务端
-  `view` 开关，关闭后拒绝继续创建或消费；
-- 当前仅用于 `view` 测试，只允许读取和展示正文；
-- 不提供编辑、上传、保存、转 PDF、套红、清稿、签章和附件接管；
-- 不伪造 `saveFile` 成功，也不会向致远回写文件；
-- FileZ 密钥只在 A8 后端读取和使用，不进入浏览器、URL 或日志；
-- 匿名白名单仅包含 `/ruianFileZContent.do` 的 `index` 和兼容
-  `download` 方法；
-- 下载请求仍必须通过短时 capability 校验，白名单不等于无条件放行；
-- 当前 FileZ Web SDK 合同要求浏览器取得 content bearer，再交给 FileZ
-  driver。已获查看权限的测试用户可从 DevTools 观察该短时 bearer，并在
-  过期/耗尽前直接读取原始正文；`download:false` 只关闭 FileZ UI，不是
-  服务端 DLP/防下载边界；
-- `off` 会立即拒绝后续请求，但当前 capability 没有策略 epoch；若在
-  60/300 秒 TTL 内快速重新启用 `view`，未耗尽旧 token 可能重新有效；
-- capability 当前存于单个 JVM，正文会全量进入 A8 堆内存；只允许单节点、
-  小文件、可信测试用户验证；
-- 不记录正文、文件名、用户信息或 capability 原文。
+- 查看 wrapper、编辑 wrapper、编辑下载和编辑上传使用不同 capability；
+- wrapper 绑定用户、session、nonce，且一次消费；
+- 浏览器消息校验 source、origin、channel、protocol、sessionId 和 nonce；
+- FileZ 回调 URL 不带 query，下载和上传使用不同的参数名携带短时票据；
+- 上传只允许原文档后缀且受服务端最大字节数限制；
+- 保存前做 A8 文件版本比较，冲突时拒绝静默覆盖；
+- callback 按 Node 风格恰好调用一次；
+- 有未保存修改时，编辑器异常不会为了原生回退而销毁唯一内容，而是阻断提交；
+- FileZ 密钥只在 A8 后端读取，不进入浏览器、URL 或日志。
 
-这是验证包，不是生产发布包。只有在 capability、对象权限、过期时间和
-重放防护全部验证通过后，才能继续扩大使用范围。临时测试约束是：只使用
-非敏感测试文档；关闭后按实际 content TTL 等待（默认 300 秒、最大
-600 秒，保守按 600 秒）或在 off 状态重启 A8，再重新启用；不得把
-`download:false` 当成防下载承诺。
+当前仍是单节点测试版。生产化前还要补齐孤儿新文件回收、已有协同/文档中心
+ACL、多节点共享状态、审计、限流、真实 `isEmpty`、故障注入和压力测试。
 
-## 运行模式
+## IDEA 构建
 
-服务端配置是模式上限：
+工程已配置 Java 8 模块和 JAR Artifact：
 
 ```text
-category: ruian_filez_view
-filez.enabled: true | false
-filez.facadeMode: off | shadow | view
+模块：    filez-officesdk-facade-poc
+Artifact：ruian-filez-facade-poc-0.6.1:jar
+输出：    out/artifacts/ruian_filez_facade_poc_0_6_1/
+          ruian-filez-facade-poc-0.6.1.jar
 ```
 
-- `off`：注销 FileZ Resolver，全部使用致远原生 OfficeSDK；
-- `shadow`：只记录脱敏路由结果，全部使用致远原生 OfficeSDK；
-- `view`：新页面默认对严格白名单内的 Word 正文查看启用 FileZ。
-
-缺少任一启用条件、值非法或配置服务异常时均按 `off` 处理。URL 参数只保留
-诊断降级能力：
+在 IDEA 中执行：
 
 ```text
-filezFacade=off
-filezFacade=shadow
+Build -> Build Artifacts -> ruian-filez-facade-poc-0.6.1:jar -> Build
 ```
 
-服务端为 `view` 时，以上参数可让当前页面临时回到原生或 shadow；删除参数
-并刷新即可恢复服务端默认。`filezFacade=view` 不再具有启用权限，旧书签
-可以继续打开，但不能绕过服务端 `off/shadow`。
+A8 依赖通过 IDEA 应用级 `lib` 库以 `PROVIDED` 方式引用，不会被打进插件 JAR。
+`src/main/resources` 会进入 JAR，`src/main/webapp` 不会进入 JAR。本项目不再
+提供 PowerShell 构建或部署脚本。IDEA 的 `lib` 是本机应用级库；换电脑打开
+工程时，需要把它重新指向该机器 A8 的 `WEB-INF/lib`。
 
-## 独立后端组件
+## 手工部署
 
-Spring Bean：
+Codex 不执行部署。操作顺序：
 
-```text
-ruianFileZCapabilityService
-ruianFileZViewSessionService
-ruianFileZViewManager
-```
+2026-08-03 最后一次只读核对时，A8 根 `WEB-INF/lib` 已出现一个
+`ruian-filez-facade-poc-0.6.1.jar`，关键静态资源也与当前工作区一致；
+`WEB-INF/lib/customer` 中没有同名 JAR。该现状不等同于现场验收通过。
+根 `WEB-INF/lib` 是本机已经验证会进入 WebApp 类路径的位置。当前没有找到
+`WEB-INF/lib/customer` 会被此版 A8 递归加入类路径的明确配置，因此本版部署
+统一使用根 `WEB-INF/lib`，不能把“目录名称像客开目录”当成可加载证据。
 
-Controller：
+1. 停止 A8；
+2. 备份将覆盖的相对文件，尤其是
+   `E:\Seeyon\A8\ApacheJetspeed\webapps\seeyon\common\office\js\officeSDK.js`；
+3. 同时检查 `WEB-INF/lib` 和 `WEB-INF/lib/customer`，移走全部旧
+   `ruian-filez-facade-poc-*.jar`；
+4. 将 IDEA 生成的 `ruian-filez-facade-poc-0.6.1.jar` 复制到已验证的类路径：
 
-```text
-/ruianFileZView.do
-/ruianFileZContent.do
-```
+   ```text
+   E:\Seeyon\A8\ApacheJetspeed\webapps\seeyon\WEB-INF\lib\
+   ```
 
-实际会话由登录态 AJAX manager 创建，请求沿用 A8 的 CSRF token；
-`/ruianFileZView.do` 保持 A8 登录校验，只负责用短期 ticket 输出同源
-查看 wrapper。FileZ 要求下载地址不带查询串，因此生产下载地址是
-`/ruianFileZContent.do`，由 A8 默认路由到 `index`；`download` 仅作为
-兼容入口。两个入口虽然在匿名白名单中，仍必须通过一次性短时 capability
-鉴权。
+5. 将 `src/main/webapp/` 下的全部内容按相对路径合并到：
 
-## 正文授权绑定
+   ```text
+   E:\Seeyon\A8\ApacheJetspeed\webapps\seeyon\
+   ```
 
-V10 公文正文以 `ctp_content_all` 为权威数据源。插件通过 A8 自带的
-`ctpMainbodyManager` 查询当前公文，只接受唯一一条同时满足以下条件的记录：
+6. 确认整个 A8 只剩一个 `0.6.1` Facade JAR，再启动 A8；
+7. 系统管理员进入 FileZ 集成设置，选择“查看与编辑”；
+8. 强制刷新浏览器并按下节验证。
 
-- `moduleId` 等于当前 `affair.objectId`；
-- `moduleType` 等于 `ModuleType.edoc`（值为 `4`）；
-- `contentType` 为 Word/WPS 正文（`41` 或 `43`）；
-- `sort` 为主正文值 `1`；
-- `content` 可解析为请求中的 `V3XFile.id`，且两者完全相等。
-
-只要 A8 已存在任何 `ctp_content_all` 记录，就不会回退并接受可能过期的
-`edoc_body` 文件绑定。仅在完全没有现代内容记录的旧数据中，才使用
-`EdocApi` 做同样的精确文件 ID 校验。PDF/OFD 转换正文、历史正文、
-`contentDataId` 和客户端文件名均不能扩大授权范围。
-
-## 插件拥有的部署文件
+## 部署文件
 
 ```text
-WEB-INF/lib/customer/ruian-filez-facade-poc-0.5.0.jar
+WEB-INF/lib/ruian-filez-facade-poc-0.6.1.jar
 apps_res/ruian-filez-facade-poc/bootstrap.js
 apps_res/ruian-filez-facade-poc/viewer.js
+apps_res/ruian-filez-facade-poc/editor.js
+apps_res/ruian-filez-facade-poc/admin-panel.js
 apps_res/ruian-filez-facade-poc/filez-sdk.js
 WEB-INF/cfgHome/plugin/ruianFilezFacadePoc/pluginCfg.xml
 WEB-INF/cfgHome/plugin/ruianFilezFacadePoc/spring/spring-ruian-filez-facade-manager.xml
 WEB-INF/cfgHome/plugin/ruianFilezFacadePoc/spring/spring-ruian-filez-facade-controller.xml
 WEB-INF/classes/needless_check_login_ruian_filez.xml
 WEB-INF/classes/needless_check_login_recheck_ruian_filez.xml
-```
-
-这些文件均使用独立目录、独立 Bean 名称和独立 Controller 地址。此外，
-手工部署会覆盖唯一一个致远原文件，复制前必须由操作人员自行完整备份：
-
-```text
 common/office/js/officeSDK.js
 ```
 
-该文件中的改动只有带
-`RUIAN-FILEZ-ADAPTER-RESOLVER-*` 标记的通用解析扩展点。以下致远标准文件
-保持原始基线，不会被覆盖：
+## 验收
+
+只使用测试文档：
+
+1. 后台 FileZ 设置能读取、保存 `edit`，非系统管理员不能修改；
+2. 新建普通协同 Word 正文，输入唯一文本，保存待发/发送并重新打开；
+3. 新建普通协同 Excel 正文，修改单元格，保存待发/发送并重新打开；
+4. 新建普通公文 Word/Excel 正文，编辑、保存/发送并重新打开；
+5. 编辑一个已有待发/待办公文并重新打开；
+6. 文档中心新建普通 Word/Excel 文档并重新打开；
+7. 切到 `view` 后新建编辑走原生、已有 Word/Excel 查看走 FileZ；
+8. 切到 `off` 后全部走原生，URL 参数不能重新提权；
+9. 模板、PDF/OFD/PPT、套红、清稿、转 PDF、签章和打印仍走原生；
+10. 模拟 FileZ 断网或上传失败，A8 保存/发送必须失败，不能假成功。
+
+只有真实保存并重新打开确认内容后，才能判定编辑 PoC 现场通过。
+
+## 回滚
+
+先把 FileZ 模式设置为 `off`，再停止 A8。移走 `0.6.1` JAR 和本插件独立
+资源，按部署前备份恢复 `officeSDK.js` 及其他覆盖文件。日常故障通常只需
+`off` 即可回到原生；完整卸载才需要恢复标准文件。
+
+完整研究证据、改动清单、限制和升级策略见：
 
 ```text
-WEB-INF/cfgHome/base/systemProperties.xml
-WEB-INF/lib/seeyon-ctp-core.jar
-WEB-INF/lib/javax.servlet-api.jar
+D:\Java-project\v10.0瑞安源码\致远A8与FileZ低侵入集成研究报告.md
 ```
-
-当前审核后的文件保存在
-`src/main/webapp/common/office/js/officeSDK.js`，固定 SHA-256 为
-`173DC0F49FE44A2D985C94C7CB3A47B77B2BA50090D8D15AA1A745E760659F0A`；
-其中六个 Resolver marker 均只能出现一次。原自动哈希门禁已随构建工具删除，
-因此手工部署者必须自行核对源文件和目标文件；如果致远升级改变了目标
-`officeSDK.js`，不得直接覆盖，必须先基于新版本重新审查和适配扩展点。
-
-## IDEA 构建与手工部署
-
-IDEA Java 模块和 JAR Artifact 已配置完成：
-
-```text
-模块：filez-officesdk-facade-poc
-Artifact：ruian-filez-facade-poc-0.5.0:jar
-输出：out/artifacts/ruian_filez_facade_poc_0_5_0/
-      ruian-filez-facade-poc-0.5.0.jar
-```
-
-模块固定为 Java 8，复用 IDEA 应用级 `lib` 库（指向 A8 的
-`WEB-INF/lib`），并将其设为 `PROVIDED`，所以 A8 的依赖 JAR 不会被打进插件
-JAR。`src/main/resources/META-INF` 会进入 JAR，`src/main/webapp` 不会进入
-JAR。重新加载 IDEA 项目后，执行 `Build -> Build Artifacts ->
-ruian-filez-facade-poc-0.5.0:jar -> Build` 即可。
-
-原 PowerShell 构建、测试、部署、校验、回滚和卸载工具已按用户要求全部删除。
-Java 冒烟测试源码仍保留在 `src/test/java`，JavaScript 合同测试仍保留在
-`src/test/js`，可由 IDEA 或 Node 单独执行。
-
-手工部署前先停止 A8，并备份所有即将覆盖或删除的目标文件。复制映射为：
-
-```text
-IDEA Artifact 输出的 ruian-filez-facade-poc-0.5.0.jar
-  -> E:\Seeyon\A8\ApacheJetspeed\webapps\seeyon\WEB-INF\lib\customer\
-
-src\main\webapp\ 下的全部内容
-  -> E:\Seeyon\A8\ApacheJetspeed\webapps\seeyon\（按相对路径合并）
-```
-
-复制 `0.5.0` JAR 前必须移走旧的
-`ruian-filez-facade-poc-0.4.0.jar`，最终 `WEB-INF/lib/customer` 只能保留一个
-Facade 版本。`src/main/webapp` 已经按 A8 WebRoot 相对路径组织，包含插件
-脚本、配置、登录校验 sidecar，以及审核版
-`common/office/js/officeSDK.js`，无需重新打包或改目录。该 OfficeSDK 的固定
-SHA-256 为
-`173DC0F49FE44A2D985C94C7CB3A47B77B2BA50090D8D15AA1A745E760659F0A`；
-若 OA 升级后目标文件不是已知基线，必须停止手工覆盖并重新适配。
-
-### 管理员一次性启用
-
-部署并启动 A8 后，以**系统管理员**登录。在任一已加载 A8 公共脚本的
-同源 PC 页面打开浏览器控制台，执行：
-
-```javascript
-callBackendMethod(
-  'ruianFileZViewManager',
-  'setFacadePolicy',
-  { enabled: true, mode: 'view' },
-  {
-    success: function (result) { console.log(result); },
-    error: function (error) { console.error(error); }
-  }
-);
-```
-
-查询当前有效策略：
-
-```javascript
-callBackendMethod(
-  'ruianFileZViewManager',
-  'getFacadePolicy',
-  {},
-  {
-    success: function (result) { console.log(result); },
-    error: function (error) { console.error(error); }
-  }
-);
-```
-
-紧急关闭：
-
-```javascript
-callBackendMethod(
-  'ruianFileZViewManager',
-  'setFacadePolicy',
-  { enabled: false, mode: 'off' },
-  {
-    success: function (result) { console.log(result); },
-    error: function (error) { console.error(error); }
-  }
-);
-```
-
-三个调用都由 A8 原生 AJAX 通道携带登录态和 CSRF 信息；后端只接受同源
-POST 和 `isSystemAdmin()`。接口固定写入两个非敏感策略键，不允许调用者指定
-category/key，也不会返回 FileZ 地址、仓库或密钥。策略变更后刷新已打开的
-业务页面；新页面不再需要 `filezFacade=view`。
-
-如果服务端查询结果是 `view`，但该浏览器标签曾经显式保存过
-`shadow/off` 降级，可在控制台清除该本地降级后刷新：
-
-```javascript
-top.__RUIAN_FILEZ_FACADE_CONTROL__.setMode(
-  'view',
-  'clear-local-downgrade'
-);
-location.reload();
-```
-
-该调用仍受 `serverMode` 上限约束；服务端不是 `view` 时不能借此启用 FileZ。
-
-## 只读查看验证
-
-1. 部署后启动 A8。开关尚未显式启用时，普通页面和公文正文必须保持原生。
-2. 用系统管理员账号调用 `ruianFileZViewManager.setFacadePolicy`，把模式设为
-   `view`；该方法只接受同源 POST、A8 CSRF 校验和系统管理员身份。
-3. 打开一个包含 Word 正文的公文查看页面，URL 不添加
-   `filezFacade=view`。正文应自动由 FileZ 显示，且没有编辑或保存入口。
-4. 网络请求中可以出现独立的 `ruianFileZView.do` 和无查询串的
-   `ruianFileZContent.do`，但不应出现上传、保存或转换请求。
-5. 在当前页面添加 `filezFacade=off` 并刷新，应完整回到原生；删除参数并
-   刷新，应再次跟随服务端 `view`。
-6. 管理员把服务端模式设回 `off` 后刷新页面；即使 URL 或旧
-   `sessionStorage` 中仍有 `view`，也不得接管。
-
-验证期间只使用测试文件。不要在该版本中执行真实编辑或生产文件保存。
-
-## 手工回滚
-
-如果当前策略为 `view/shadow`，先在 A8 仍运行时用前述
-`setFacadePolicy` 命令设置 `{ enabled: false, mode: 'off' }`，确认成功后停止
-A8。删除 `0.5.0` JAR，恢复部署前备份的旧 JAR、插件资源、配置和
-`officeSDK.js`，确认 customer 目录仍只有一个 Facade JAR 后再启动 A8。
-
-彻底卸载时同样必须先关闭策略并停止 A8，再删除本插件拥有的 JAR、
-`apps_res/ruian-filez-facade-poc`、插件配置和两个登录校验 sidecar。唯一的
-致远标准文件 `officeSDK.js` 不能直接删除，必须从可靠的部署前备份恢复。
-
-## 生产化前必须完成
-
-当前 `0.5.0` 是单节点、本地测试验证版，不能直接作为生产发布包。进入生产
-前至少要完成：
-
-- 正文下载增加并发闸门和用户级限流；大文件尽可能改为流式处理，避免
-  50–200 MB 文件并发时占满 A8 堆内存；
-- 非 localhost 环境强制 OA 与 FileZ 全链路 HTTPS，并要求 HMAC 密钥至少
-  32 个随机字节；
-- 多节点部署时把短时 capability 放入共享 TTL 存储，或明确保证浏览器和
-  FileZ 回调始终粘滞到同一节点；
-- 增加成功访问审计、撤权策略和压测，同时继续保持下载、打印、写入权限
-  关闭。

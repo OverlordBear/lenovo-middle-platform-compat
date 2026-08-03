@@ -7,4 +7,11 @@
             <method>download</method>
         </methods>
     </bean>
+    <bean>
+        <id>/ruianFileZEditContent.do</id>
+        <methods>
+            <method>index</method>
+            <method>upload</method>
+        </methods>
+    </bean>
 </beans>

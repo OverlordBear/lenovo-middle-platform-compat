@@ -1,21 +1,28 @@
 (function (window, document) {
   'use strict';
 
-  var VERSION = '0.5.0';
+  var VERSION = '0.6.1';
   var MODE_OFF = 'off';
   var MODE_SHADOW = 'shadow';
   var MODE_VIEW = 'view';
+  var MODE_EDIT = 'edit';
   var STORAGE_KEY = 'ruian.filez.facade.mode';
   var STATE_KEY = '__RUIAN_FILEZ_FACADE_POC__';
   var CONTROL_KEY = '__RUIAN_FILEZ_FACADE_CONTROL__';
   var WINDOWS_KEY = '__RUIAN_FILEZ_FACADE_WINDOWS__';
-  var BRIDGE_KEY = '__RUIAN_FILEZ_FACADE_BRIDGE_050__';
-  var VIEWER_KEY = '__RUIAN_FILEZ_VIEWER_050__';
+  var BRIDGE_KEY = '__RUIAN_FILEZ_FACADE_BRIDGE_060__';
+  var VIEWER_KEY = '__RUIAN_FILEZ_VIEWER_060__';
+  var EDITOR_KEY = '__RUIAN_FILEZ_EDITOR_060__';
   var RESOLVER_QUEUE_KEY = '__SEEYON_OFFICE_ADAPTER_RESOLVERS__';
-  var RESOLVER_NAME = 'ruian-filez-readonly-view';
-  var ADAPTER_KEY = 'RUIAN_FILEZ_VIEW';
-  var ADAPTER_URL =
+  var RESOLVER_NAME = 'ruian-filez-view-edit';
+  var VIEW_ADAPTER_KEY = 'RUIAN_FILEZ_VIEW';
+  var VIEW_ADAPTER_URL =
     '/apps_res/ruian-filez-facade-poc/viewer.js?v=' + VERSION;
+  var EDIT_ADAPTER_KEY = 'RUIAN_FILEZ_EDIT';
+  var EDIT_ADAPTER_URL =
+    '/apps_res/ruian-filez-facade-poc/editor.js?v=' + VERSION;
+  var ADMIN_PANEL_URL =
+    '/apps_res/ruian-filez-facade-poc/admin-panel.js?v=' + VERSION;
   var BADGE_ID = 'ruian-filez-facade-poc-badge';
   var MAX_EVENTS = 200;
   var bootstrapScript = document.currentScript;
@@ -77,11 +84,15 @@
     return (
       value === MODE_OFF ||
       value === MODE_SHADOW ||
-      value === MODE_VIEW
+      value === MODE_VIEW ||
+      value === MODE_EDIT
     );
   }
 
   function modeRank(mode) {
+    if (mode === MODE_EDIT) {
+      return 3;
+    }
     if (mode === MODE_VIEW) {
       return 2;
     }
@@ -227,9 +238,11 @@
       ' · 就绪 ' +
       ready;
     badge.title =
-      control.mode === MODE_VIEW
-        ? '只读查看：严格白名单内的公文 Word 正文由 FileZ 承载'
-        : '影子模式：只记录路由结果，正文仍由致远原生适配器承载';
+      control.mode === MODE_EDIT
+        ? 'FileZ 查看与基础编辑已启用；高级公文操作仍回退致远原生适配器'
+        : control.mode === MODE_VIEW
+          ? 'FileZ 只读查看已启用'
+          : '影子模式：只记录路由结果';
   }
 
   function ensureControl(root, serverMode) {
@@ -437,6 +450,144 @@
       .replace(/\s+/g, '');
   }
 
+  function officeBodyFileType(value) {
+    var normalized = normalizeFileType(value);
+    var mapping = {
+      '41': 'doc',
+      '42': 'xls',
+      '43': 'wps',
+      '44': 'et'
+    };
+    if (mapping[normalized]) {
+      return mapping[normalized];
+    }
+    return ['doc', 'docx', 'wps', 'xls', 'xlsx', 'et'].indexOf(normalized) >= 0
+      ? normalized
+      : '';
+  }
+
+  function fileTypeFromName(value) {
+    var name = safeString(value).split(/[?#]/)[0];
+    var slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+    var dot;
+    if (slash >= 0) {
+      name = name.slice(slash + 1);
+    }
+    dot = name.lastIndexOf('.');
+    return dot > 0 ? officeBodyFileType(name.slice(dot + 1)) : '';
+  }
+
+  function contentApiFileType(api) {
+    var keys = ['fileType', 'contentType', 'bodyType'];
+    var i;
+    var value;
+    if (!api || typeof api.getMainBodyData !== 'function') {
+      return '';
+    }
+    for (i = 0; i < keys.length; i += 1) {
+      try {
+        value = officeBodyFileType(api.getMainBodyData(keys[i]));
+      } catch (ignore) {
+        value = '';
+      }
+      if (value) {
+        return value;
+      }
+    }
+    return '';
+  }
+
+  function windowBodyFileType(candidate) {
+    var values = [];
+    var bodyWindow;
+    var bodyElement;
+    var i;
+    var value;
+    if (!candidate) {
+      return '';
+    }
+    try {
+      values.push(candidate.fileType, candidate.contentType, candidate.bodyType);
+      values.push(
+        queryValue(candidate.location && candidate.location.search, 'fileType'),
+        queryValue(candidate.location && candidate.location.search, 'contentType'),
+        queryValue(candidate.location && candidate.location.search, 'bodyType')
+      );
+      value = contentApiFileType(candidate.contentAPI);
+      if (value) {
+        return value;
+      }
+      if (typeof candidate._getZWIframe === 'function') {
+        bodyWindow = candidate._getZWIframe();
+        bodyWindow = bodyWindow && (bodyWindow.contentWindow || bodyWindow);
+        value = contentApiFileType(bodyWindow && bodyWindow.contentAPI);
+        if (value) {
+          return value;
+        }
+      }
+      if (candidate.document && candidate.document.getElementById) {
+        for (i = 0; i < 3; i += 1) {
+          bodyElement = candidate.document.getElementById(
+            i === 0 ? 'fileType' : i === 1 ? 'contentType' : 'bodyType'
+          );
+          values.push(bodyElement && bodyElement.value);
+        }
+      }
+    } catch (ignoreCandidate) {
+      // Only same-origin, readable page state is considered.
+    }
+    for (i = 0; i < values.length; i += 1) {
+      value = officeBodyFileType(values[i]);
+      if (value) {
+        return value;
+      }
+    }
+    return '';
+  }
+
+  function effectiveFileType(instance, params) {
+    var declared = normalizeFileType(params && params.fileType);
+    var value = declared ? officeBodyFileType(declared) || declared : '';
+    var candidates;
+    var i;
+    if (!value) {
+      value = officeBodyFileType(
+        params && (params.contentType || params.bodyType)
+      );
+    }
+    if (!value) {
+      value = fileTypeFromName(params && params.fileName);
+    }
+    if (!value && instance && instance.params && instance.params !== params) {
+      declared = normalizeFileType(instance.params.fileType);
+      value = declared
+        ? officeBodyFileType(declared) || declared
+        : officeBodyFileType(
+            instance.params.contentType || instance.params.bodyType
+          ) || fileTypeFromName(instance.params.fileName);
+    }
+    if (!value) {
+      candidates = [window];
+      try {
+        if (window.parent && window.parent !== window) {
+          candidates.push(window.parent);
+        }
+        if (root && candidates.indexOf(root) < 0) {
+          candidates.push(root);
+        }
+      } catch (ignoreAncestors) {
+        // Cross-origin ancestors are not inspected.
+      }
+      for (i = 0; i < candidates.length && !value; i += 1) {
+        value = windowBodyFileType(candidates[i]);
+      }
+    }
+    if (value && params) {
+      params.fileType = value;
+    }
+    return value;
+  }
+
   function normalizeMode(value) {
     return safeString(value).toUpperCase().replace(/\s+/g, '');
   }
@@ -451,16 +602,72 @@
     return /^-?\d{5,20}$/.test(value) ? value : '';
   }
 
+  function topQuery(name) {
+    try {
+      return queryValue(root.location.search, name);
+    } catch (ignore) {
+      return '';
+    }
+  }
+
+  function surfaceOf(pathname) {
+    if (/\/govdoc\/govdoc\.do$/.test(pathname)) {
+      return 'GOVDOC';
+    }
+    if (/\/collaboration\/collaboration\.do$/.test(pathname)) {
+      return 'COLLABORATION';
+    }
+    if (/\/(?:doc\/)?doc\.do$/.test(pathname)) {
+      return 'DOCUMENT';
+    }
+    return 'OTHER';
+  }
+
+  function isNewDocument(surface, params) {
+    var method = safeString(topQuery('method')).toLowerCase();
+    var hasExplicitTemplate = !!(
+      topQuery('templateId') || topQuery('transOfficeId')
+    );
+    if (hasExplicitTemplate) {
+      return false;
+    }
+    // A8 preallocates originalFileId/originalCreateDate placeholders on a
+    // genuine new collaboration. The top method is the authoritative signal.
+    if (surface === 'COLLABORATION' && method === 'newcoll') {
+      return true;
+    }
+    if (params && (params.originalFileId || params.originalCreateDate)) {
+      return false;
+    }
+    if (surface === 'GOVDOC') {
+      return method === 'newgovdoc';
+    }
+    if (surface === 'COLLABORATION') {
+      return method === 'newcoll';
+    }
+    if (surface === 'DOCUMENT') {
+      return method === 'theneweditdoc' || method === 'neweditdoc';
+    }
+    return false;
+  }
+
   function routeDecision(instance, params) {
     var pathname = '';
     var category = safeString(params && params.category);
-    var fileType = normalizeFileType(params && params.fileType);
+    var fileType = effectiveFileType(instance, params);
+    var officeFamily = ['xls', 'xlsx', 'et'].indexOf(fileType) >= 0
+      ? 'EXCEL'
+      : 'WORD';
     var domId = safeString(params && params.domId);
     var viewMode = safeString(params && params.viewMode).toLowerCase();
     var mode = normalizeMode(params && params.mode);
     var fileId = safeString(params && params.fileId);
     var affairId = topAffairId();
-    var reason = 'MATCH_GOVDOC_WORD_VIEW';
+    var surface;
+    var newDocument;
+    var viewMatched = false;
+    var editMatched = false;
+    var reason = 'PASS_UNKNOWN';
 
     try {
       pathname = safeString(root.location.pathname)
@@ -470,37 +677,58 @@
       pathname = '';
     }
 
+    surface = surfaceOf(pathname);
+    newDocument = isNewDocument(surface, params);
+
     if (
       !params ||
       params.__ruianFilezBypass === true ||
       (instance && instance.__ruianFilezBypass === true)
     ) {
       reason = 'PASS_BYPASS';
-    } else if (!/\/govdoc\/govdoc\.do$/.test(pathname)) {
+    } else if (surface === 'OTHER') {
       reason = 'PASS_SURFACE';
-    } else if (category !== '4') {
-      reason = 'PASS_CATEGORY';
-    } else if (domId !== 'officeEditorFrame') {
-      reason = 'PASS_DOM';
-    } else if (['doc', 'docx', 'wps'].indexOf(fileType) < 0) {
+    } else if (
+      ['doc', 'docx', 'wps', 'xls', 'xlsx', 'et'].indexOf(fileType) < 0
+    ) {
       reason = 'PASS_FILE_TYPE';
-    } else if (viewMode !== 'view' || mode !== 'VIEW') {
-      reason = 'PASS_MODE';
-    } else if (!/^-?\d{5,20}$/.test(fileId)) {
-      reason = 'PASS_FILE_ID';
-    } else if (!affairId) {
-      reason = 'PASS_AFFAIR_ID';
+    } else if (
+      surface === 'GOVDOC' &&
+      category === '4' &&
+      domId === 'officeEditorFrame' &&
+      viewMode === 'view' &&
+      mode === 'VIEW' &&
+      /^-?\d{5,20}$/.test(fileId) &&
+      affairId
+    ) {
+      viewMatched = true;
+      reason = 'MATCH_GOVDOC_' + officeFamily + '_VIEW';
+    } else if (
+      mode === 'EDIT' &&
+      (viewMode === '' || viewMode === 'edit') &&
+      ((surface === 'GOVDOC' && newDocument) ||
+        (surface === 'GOVDOC' && affairId && /^-?\d{5,20}$/.test(fileId)) ||
+        ((surface === 'COLLABORATION' || surface === 'DOCUMENT') &&
+          newDocument))
+    ) {
+      editMatched = true;
+      reason = newDocument
+        ? 'MATCH_' + officeFamily + '_NEW_EDIT'
+        : 'MATCH_GOVDOC_' + officeFamily + '_EDIT';
+    } else {
+      reason = 'PASS_MODE_OR_SCOPE';
     }
 
     return {
-      matched: reason === 'MATCH_GOVDOC_WORD_VIEW',
+      matched: viewMatched || editMatched,
+      viewMatched: viewMatched,
+      editMatched: editMatched,
       reason: reason,
-      surface: /\/govdoc\/govdoc\.do$/.test(pathname)
-        ? 'GOVDOC'
-        : 'OTHER',
+      surface: surface,
       fileType: fileType || 'UNKNOWN',
       mode: mode || 'UNKNOWN',
       affairId: affairId,
+      newDocument: newDocument,
       hasAffairId: !!affairId,
       hasFileId: !!fileId
     };
@@ -524,16 +752,33 @@
       hasFileId: decision.hasFileId
     });
 
-    if (control.mode !== MODE_VIEW || !decision.matched) {
+    if (!decision.matched) {
       return null;
     }
 
     params.__ruianFilezAffairId = decision.affairId;
+    params.__ruianFilezSurface = decision.surface;
+    params.__ruianFilezNewDocument = decision.newDocument;
     params.__ruianFilezRouteEpoch = control.epoch;
-    return {
-      key: ADAPTER_KEY,
-      url: [ADAPTER_URL]
-    };
+    if (
+      decision.editMatched &&
+      control.mode === MODE_EDIT
+    ) {
+      return {
+        key: EDIT_ADAPTER_KEY,
+        url: [EDIT_ADAPTER_URL]
+      };
+    }
+    if (
+      decision.viewMatched &&
+      (control.mode === MODE_VIEW || control.mode === MODE_EDIT)
+    ) {
+      return {
+        key: VIEW_ADAPTER_KEY,
+        url: [VIEW_ADAPTER_URL]
+      };
+    }
+    return null;
   }
 
   function resolverQueue() {
@@ -595,11 +840,33 @@
     }
   }
 
-  function cleanupViewer(reason, fallbackToNative) {
+  function cleanupAdapters(reason, fallbackToNative) {
     var viewer = window[VIEWER_KEY];
+    var editor = window[EDITOR_KEY];
     if (viewer && typeof viewer.cleanupAll === 'function') {
       viewer.cleanupAll(reason, fallbackToNative);
     }
+    if (editor && typeof editor.cleanupAll === 'function') {
+      editor.cleanupAll(reason, fallbackToNative);
+    }
+  }
+
+  function loadAdminPanel() {
+    var id = 'ruian-filez-admin-panel-script';
+    var script;
+    var contextPath;
+    if (!isPcSource() || document.getElementById(id)) {
+      return;
+    }
+    contextPath = safeString(window._ctxPath) || '/seeyon';
+    if (contextPath.charAt(0) !== '/') {
+      contextPath = '/' + contextPath;
+    }
+    script = document.createElement('script');
+    script.id = id;
+    script.async = false;
+    script.src = contextPath.replace(/\/+$/, '') + ADMIN_PANEL_URL;
+    (document.head || document.documentElement).appendChild(script);
   }
 
   function isPcSource() {
@@ -609,9 +876,11 @@
   window[BRIDGE_KEY] = {
     version: VERSION,
     record: record,
-    isModeActive: function (epoch) {
+    isModeActive: function (epoch, capability) {
       return (
-        control.mode === MODE_VIEW &&
+        (capability === 'edit'
+          ? control.mode === MODE_EDIT
+          : control.mode === MODE_VIEW || control.mode === MODE_EDIT) &&
         (epoch === undefined || Number(epoch) === Number(control.epoch))
       );
     },
@@ -625,21 +894,23 @@
 
   var controller = {
     onMode: function (mode, epoch) {
-      var leavingView = state.mode === MODE_VIEW && mode !== MODE_VIEW;
+      var leavingActive =
+        (state.mode === MODE_VIEW || state.mode === MODE_EDIT) &&
+        mode !== state.mode;
       state.serverMode = control.serverMode;
       state.mode = mode;
       state.epoch = epoch;
 
       if (mode === MODE_OFF) {
-        cleanupViewer('MODE_OFF', true);
+        cleanupAdapters('MODE_OFF', true);
         removeResolver();
         state.installStatus = 'disabled';
         state.lastReason = 'MODE_OFF';
         return;
       }
 
-      if (leavingView) {
-        cleanupViewer('MODE_CHANGED', true);
+      if (leavingActive) {
+        cleanupAdapters('MODE_CHANGED', true);
       }
 
       if (!isPcSource()) {
@@ -651,6 +922,7 @@
       }
 
       installResolver();
+      loadAdminPanel();
       publish();
     },
 
@@ -673,10 +945,12 @@
     document.addEventListener('DOMContentLoaded', function () {
       publish();
       renderBadge(control);
+      loadAdminPanel();
     });
   } else {
     publish();
     renderBadge(control);
+    loadAdminPanel();
   }
 
   window.addEventListener('load', function () {

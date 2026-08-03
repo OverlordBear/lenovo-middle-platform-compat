@@ -3,6 +3,7 @@ package com.ruian.filez.facade.poc.web;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -22,6 +23,7 @@ import com.ruian.filez.facade.poc.file.LegacyBodyUnpacker.UnpackException;
 import com.ruian.filez.facade.poc.service.FilezCapabilityService;
 import com.ruian.filez.facade.poc.service.FilezCapabilityService.FileBinding;
 import com.ruian.filez.facade.poc.service.FilezCapabilityService.Grant;
+import com.ruian.filez.facade.poc.service.FilezCapabilityService.Purpose;
 import com.seeyon.ctp.common.config.manager.ConfigManager;
 import com.seeyon.ctp.common.controller.BaseController;
 import com.seeyon.ctp.common.filemanager.manager.FileManager;
@@ -36,6 +38,8 @@ public class FilezContentController extends BaseController {
     private static final Log LOG =
             LogFactory.getLog(FilezContentController.class);
     private static final String TOKEN_NAME = "x-ruian-filez-token";
+    private static final String EDIT_DOWNLOAD_TOKEN_NAME =
+            "x-ruian-filez-download-token";
 
     private final LegacyBodyUnpacker unpacker = new LegacyBodyUnpacker();
     private final FilezRuntimeConfig runtimeConfig = new FilezRuntimeConfig();
@@ -82,12 +86,15 @@ public class FilezContentController extends BaseController {
             return null;
         }
 
-        String token = extractUnambiguousToken(request);
-        if (token == null) {
-            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-            return null;
+        String token = extractUnambiguousToken(request, TOKEN_NAME);
+        Grant grant = token == null
+                ? null : ruianFileZCapabilityService.consumeContent(token);
+        if (grant == null) {
+            token = extractUnambiguousToken(request, EDIT_DOWNLOAD_TOKEN_NAME);
+            grant = token == null
+                    ? null
+                    : ruianFileZCapabilityService.consumeEditDownload(token);
         }
-        Grant grant = ruianFileZCapabilityService.consumeContent(token);
         if (grant == null) {
             response.setStatus(HttpServletResponse.SC_FORBIDDEN);
             return null;
@@ -109,20 +116,23 @@ public class FilezContentController extends BaseController {
                 return null;
             }
 
-            if (binding.getCreateDate() == null) {
+            Date sourceDate = grant.getPurpose() == Purpose.EDIT_DOWNLOAD
+                    ? current.getCreateDate() : binding.getCreateDate();
+            if (sourceDate == null) {
                 input = fileManager.getFileInputStream(
                         Long.valueOf(binding.getFileId()));
             } else {
                 input = fileManager.getFileInputStream(
                         Long.valueOf(binding.getFileId()),
-                        binding.getCreateDate());
+                        sourceDate);
             }
 
             Result result = unpacker.unpack(
                     input,
                     declaredSize,
                     binding.getMaxFileBytes(),
-                    binding.getMimeType());
+                    binding.getMimeType(),
+                    binding.getFileName());
             byte[] bytes = result.getBytes();
             String fileName = outputFileName(
                     binding.getFileName(), result.getSuggestedExtension());
@@ -162,11 +172,12 @@ public class FilezContentController extends BaseController {
         return null;
     }
 
-    private static String extractUnambiguousToken(HttpServletRequest request) {
+    private static String extractUnambiguousToken(
+            HttpServletRequest request, String tokenName) {
         Set<String> values = new LinkedHashSet<String>();
-        addToken(values, request.getHeader(TOKEN_NAME));
+        addToken(values, request.getHeader(tokenName));
 
-        String[] parameters = request.getParameterValues(TOKEN_NAME);
+        String[] parameters = request.getParameterValues(tokenName);
         if (parameters != null) {
             for (String parameter : parameters) {
                 addToken(values, parameter);
@@ -176,7 +187,7 @@ public class FilezContentController extends BaseController {
         Cookie[] cookies = request.getCookies();
         if (cookies != null) {
             for (Cookie cookie : cookies) {
-                if (cookie != null && TOKEN_NAME.equalsIgnoreCase(cookie.getName())) {
+                if (cookie != null && tokenName.equalsIgnoreCase(cookie.getName())) {
                     addToken(values, cookie.getValue());
                 }
             }
@@ -215,11 +226,14 @@ public class FilezContentController extends BaseController {
         }
         if (suggestedExtension != null && suggestedExtension.length() > 0) {
             String lower = result.toLowerCase(Locale.ENGLISH);
-            if (lower.endsWith(".docx")) {
+            if (lower.endsWith(".docx") || lower.endsWith(".xlsx")) {
                 result = result.substring(0, result.length() - 5);
             } else if (lower.endsWith(".doc")
-                    || lower.endsWith(".wps")) {
+                    || lower.endsWith(".wps")
+                    || lower.endsWith(".xls")) {
                 result = result.substring(0, result.length() - 4);
+            } else if (lower.endsWith(".et")) {
+                result = result.substring(0, result.length() - 3);
             }
             result += suggestedExtension;
         }

@@ -1,9 +1,9 @@
 (function (window, document) {
   'use strict';
 
-  var VERSION = '0.5.0';
-  var GLOBAL_KEY = '__RUIAN_FILEZ_VIEWER_050__';
-  var BRIDGE_KEY = '__RUIAN_FILEZ_FACADE_BRIDGE_050__';
+  var VERSION = '0.6.1';
+  var GLOBAL_KEY = '__RUIAN_FILEZ_VIEWER_060__';
+  var BRIDGE_KEY = '__RUIAN_FILEZ_FACADE_BRIDGE_060__';
   var ADAPTER_KEY = 'RUIAN_FILEZ_VIEW';
   var READY_CHANNEL = 'ruian-filez-view';
   var READY_PROTOCOL = 'postMessage-v1';

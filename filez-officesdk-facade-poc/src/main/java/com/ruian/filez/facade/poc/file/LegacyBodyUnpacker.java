@@ -25,6 +25,20 @@ public final class LegacyBodyUnpacker {
             long declaredSize,
             long maxFileBytes,
             String originalMimeType) throws UnpackException {
+        return unpack(
+                input,
+                declaredSize,
+                maxFileBytes,
+                originalMimeType,
+                null);
+    }
+
+    public Result unpack(
+            InputStream input,
+            long declaredSize,
+            long maxFileBytes,
+            String originalMimeType,
+            String originalFileName) throws UnpackException {
         if (input == null) {
             throw new UnpackException("Stored body stream is unavailable");
         }
@@ -47,11 +61,15 @@ public final class LegacyBodyUnpacker {
 
         if (startsWith(original, DIRG)) {
             byte[] decoded = decodeDirg(original, maxFileBytes);
-            return transformed(decoded);
+            return transformed(decoded, originalMimeType, originalFileName);
         }
 
         if (startsWith(original, ZIP)) {
-            Result nested = inspectSingleEntryZip(original, maxFileBytes);
+            Result nested = inspectSingleEntryZip(
+                    original,
+                    maxFileBytes,
+                    originalMimeType,
+                    originalFileName);
             if (nested != null) {
                 return nested;
             }
@@ -60,7 +78,11 @@ public final class LegacyBodyUnpacker {
         return new Result(original, false, normalizeMime(originalMimeType), null);
     }
 
-    private Result inspectSingleEntryZip(byte[] original, long maxFileBytes)
+    private Result inspectSingleEntryZip(
+            byte[] original,
+            long maxFileBytes,
+            String originalMimeType,
+            String originalFileName)
             throws UnpackException {
         ZipInputStream zip = null;
         try {
@@ -87,7 +109,17 @@ public final class LegacyBodyUnpacker {
                 return null;
             }
             if (candidateDirg) {
-                return transformed(decodeDirg(inner, maxFileBytes));
+                return transformed(
+                        decodeDirg(inner, maxFileBytes),
+                        originalMimeType,
+                        originalFileName);
+            }
+            if (isSpreadsheet(originalMimeType, originalFileName)) {
+                return new Result(
+                        inner,
+                        true,
+                        "application/vnd.ms-excel",
+                        ".xls");
             }
             return new Result(
                     inner,
@@ -136,15 +168,49 @@ public final class LegacyBodyUnpacker {
         }
     }
 
-    private static Result transformed(byte[] decoded) {
+    private static Result transformed(
+            byte[] decoded, String originalMimeType, String originalFileName) {
+        boolean spreadsheet = isSpreadsheet(
+                originalMimeType, originalFileName);
         if (startsWith(decoded, ZIP)) {
+            if (spreadsheet) {
+                return new Result(
+                        decoded,
+                        true,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        ".xlsx");
+            }
             return new Result(
                     decoded,
                     true,
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     ".docx");
         }
+        if (spreadsheet) {
+            return new Result(
+                    decoded,
+                    true,
+                    "application/vnd.ms-excel",
+                    ".xls");
+        }
         return new Result(decoded, true, "application/msword", ".doc");
+    }
+
+    private static boolean isSpreadsheet(
+            String originalMimeType, String originalFileName) {
+        String mime = originalMimeType == null
+                ? "" : originalMimeType.trim().toLowerCase(java.util.Locale.ENGLISH);
+        if (mime.contains("spreadsheet")
+                || mime.contains("ms-excel")
+                || mime.contains("wps-office.et")
+                || mime.contains("kingsoft.et")) {
+            return true;
+        }
+        String fileName = originalFileName == null
+                ? "" : originalFileName.trim().toLowerCase(java.util.Locale.ENGLISH);
+        return fileName.endsWith(".xls")
+                || fileName.endsWith(".xlsx")
+                || fileName.endsWith(".et");
     }
 
     private static byte[] readBounded(InputStream input, long limit)

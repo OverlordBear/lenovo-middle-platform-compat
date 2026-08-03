@@ -18,6 +18,10 @@ public final class DriverUrlBuilder {
 
     private static final String DRIVER_PATH = "/docs/app/driver-callback";
     private static final String TOKEN_PARAMETER = "x-ruian-filez-token";
+    private static final String EDIT_DOWNLOAD_TOKEN_PARAMETER =
+            "x-ruian-filez-download-token";
+    private static final String EDIT_UPLOAD_TOKEN_PARAMETER =
+            "x-ruian-filez-upload-token";
 
     public String buildViewUrl(
             FilezRuntimeConfig.Snapshot config,
@@ -63,6 +67,62 @@ public final class DriverUrlBuilder {
         return config.getFilezBaseUrl() + path.toString();
     }
 
+    public String buildEditUrl(
+            FilezRuntimeConfig.Snapshot config,
+            FileBinding binding,
+            long userId,
+            String downloadToken,
+            String uploadToken,
+            String downloadUrl,
+            String uploadUrl) {
+        validateCallbackUrl(downloadUrl, "download");
+        validateCallbackUrl(uploadUrl, "upload");
+        validateCapability(downloadToken, "download");
+        validateCapability(uploadToken, "upload");
+
+        String docId = String.valueOf(binding.getFileId());
+        String userInfoJson = buildUserInfoJson(binding, userId);
+        String metaJson = buildEditMetaJson(binding, userId, docId);
+
+        StringBuilder path = new StringBuilder(1280);
+        path.append(DRIVER_PATH)
+                .append("?repoId=").append(urlEncode(config.getRepoId()))
+                .append("&docId=").append(urlEncode(docId))
+                .append("&action=edit")
+                .append("&userinfo=").append(base64UrlParameter(userInfoJson))
+                .append("&meta=").append(base64UrlParameter(metaJson))
+                .append("&downloadUrl=").append(downloadUrl)
+                .append("&uploadUrl=").append(uploadUrl)
+                .append("&params=").append(EDIT_DOWNLOAD_TOKEN_PARAMETER)
+                .append('=').append(downloadToken)
+                .append(';').append(EDIT_UPLOAD_TOKEN_PARAMETER)
+                .append('=').append(uploadToken)
+                .append("&ts=").append(System.currentTimeMillis());
+
+        String unsignedPath = path.toString();
+        path.append("&HMAC=")
+                .append(FilezCrypto.hmacSha256Hex(
+                        config.getSecret(), unsignedPath));
+        return config.getFilezBaseUrl() + path.toString();
+    }
+
+    private static void validateCallbackUrl(String value, String kind) {
+        if (value == null
+                || value.indexOf('?') >= 0
+                || value.indexOf('#') >= 0
+                || value.indexOf('&') >= 0) {
+            throw new IllegalArgumentException(
+                    "FileZ " + kind + " URL must not contain query or fragment");
+        }
+    }
+
+    private static void validateCapability(String value, String kind) {
+        if (value == null || !value.matches("[A-Za-z0-9_-]{43}")) {
+            throw new IllegalArgumentException(
+                    "Invalid FileZ " + kind + " capability");
+        }
+    }
+
     private static String buildUserInfoJson(FileBinding binding, long userId) {
         String displayName = safeText(binding.getUserDisplayName(), 128);
         String loginName = safeText(binding.getUserLoginName(), 128);
@@ -97,6 +157,33 @@ public final class DriverUrlBuilder {
                 + "\"permissions\":{"
                 + "\"read\":true,"
                 + "\"write\":false,"
+                + "\"download\":false,"
+                + "\"print\":false"
+                + "}"
+                + "}";
+    }
+
+    private static String buildEditMetaJson(
+            FileBinding binding, long userId, String docId) {
+        Date modified = binding.getUpdateDate();
+        if (modified == null) {
+            modified = binding.getCreateDate();
+        }
+        if (modified == null) {
+            modified = new Date(0L);
+        }
+        return "{"
+                + "\"id\":" + jsonString(docId) + ","
+                + "\"name\":" + jsonString(safeText(binding.getFileName(), 180)) + ","
+                + "\"modified_at\":" + jsonString(formatUtc(modified)) + ","
+                + "\"created_by\":{"
+                + "\"id\":" + jsonString(String.valueOf(userId)) + ","
+                + "\"name\":" + jsonString(
+                        safeText(binding.getUserDisplayName(), 128))
+                + "},"
+                + "\"permissions\":{"
+                + "\"read\":true,"
+                + "\"write\":true,"
                 + "\"download\":false,"
                 + "\"print\":false"
                 + "}"

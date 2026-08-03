@@ -114,6 +114,31 @@ public final class FilezCoreSmokeTest {
                 service.consumeContent(
                         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
                 "unknown well-formed capability is rejected");
+
+        IssuedCapability editWrapper = service.issueEditWrapper(
+                binding, 42L, "edit-session", "edit-nonce", 30);
+        assertNull(
+                service.consumeWrapper(editWrapper.getToken(), 42L),
+                "edit wrapper cannot be consumed as a view wrapper");
+        Grant editGrant = service.consumeEditWrapper(
+                editWrapper.getToken(), 42L);
+        assertNotNull(editGrant, "bound user consumes the edit wrapper");
+        IssuedCapability editDownload =
+                service.issueEditDownload(editGrant, 30);
+        IssuedCapability editUpload =
+                service.issueEditUpload(editGrant, 30);
+        assertNull(
+                service.consumeContent(editDownload.getToken()),
+                "edit download cannot be consumed as view content");
+        assertNotNull(
+                service.consumeEditDownload(editDownload.getToken()),
+                "edit download uses its own capability purpose");
+        assertNull(
+                service.consumeEditDownload(editUpload.getToken()),
+                "edit upload cannot be consumed as edit download");
+        assertNotNull(
+                service.consumeEditUpload(editUpload.getToken()),
+                "edit upload uses its own capability purpose");
     }
 
     private static void testViewTicketBindingAndExpiry() throws Exception {
@@ -159,6 +184,7 @@ public final class FilezCoreSmokeTest {
                 String.class,
                 int.class,
                 int.class,
+                int.class,
                 long.class,
                 String.class);
         constructor.setAccessible(true);
@@ -169,6 +195,7 @@ public final class FilezCoreSmokeTest {
                 "unit-test-secret",
                 120,
                 120,
+                1800,
                 1024L * 1024L,
                 "unit-test");
 
@@ -184,6 +211,27 @@ public final class FilezCoreSmokeTest {
                         "&downloadUrl=http://oa.test/seeyon/"
                         + "ruianFileZContent.do&uploadUrl=&params="),
                 "FileZ callback URL stays plain, queryless, and precedes params");
+
+        String editUrl = new DriverUrlBuilder().buildEditUrl(
+                config,
+                binding(),
+                42L,
+                "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+                "http://oa.test/seeyon/ruianFileZContent.do",
+                "http://oa.test/seeyon/ruianFileZEditContent.do");
+        assertTrue(
+                editUrl.contains("&action=edit&"),
+                "edit driver explicitly selects the FileZ edit action");
+        assertTrue(
+                editUrl.contains(
+                        "&downloadUrl=http://oa.test/seeyon/ruianFileZContent.do"
+                        + "&uploadUrl=http://oa.test/seeyon/ruianFileZEditContent.do"
+                        + "&params=x-ruian-filez-download-token="),
+                "edit callbacks are queryless and carry separate capabilities");
+        assertTrue(
+                editUrl.contains(";x-ruian-filez-upload-token="),
+                "download and upload use distinct FileZ capability names");
     }
 
     private static void testLegacyBodyUnpacking() throws Exception {
@@ -204,6 +252,23 @@ public final class FilezCoreSmokeTest {
                 docxResult.isTransformed(),
                 "standard multi-entry DOCX is not peeled");
         assertArrayEquals(docx, docxResult.getBytes(), "standard DOCX bytes");
+
+        byte[] xlsx = zip(
+                new String[] { "[Content_Types].xml", "xl/workbook.xml" },
+                new byte[][] {
+                    "<?xml version=\"1.0\"?><Types/>".getBytes("UTF-8"),
+                    "<workbook/>".getBytes("UTF-8")
+                });
+        Result xlsxResult = unpacker.unpack(
+                new ByteArrayInputStream(xlsx),
+                xlsx.length,
+                1024L * 1024L,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "budget.xlsx");
+        assertFalse(
+                xlsxResult.isTransformed(),
+                "standard multi-entry XLSX is not peeled");
+        assertArrayEquals(xlsx, xlsxResult.getBytes(), "standard XLSX bytes");
 
         byte[] ole = new byte[] {
                 (byte) 0xd0, (byte) 0xcf, 0x11, (byte) 0xe0,
@@ -233,6 +298,51 @@ public final class FilezCoreSmokeTest {
                 ".doc",
                 wrappedResult.getSuggestedExtension(),
                 "wrapped OLE output extension");
+
+        Result wrappedExcelResult = unpacker.unpack(
+                new ByteArrayInputStream(wrappedOle),
+                wrappedOle.length,
+                1024L,
+                "application/vnd.ms-excel",
+                "budget.xls");
+        assertTrue(
+                wrappedExcelResult.isTransformed(),
+                "single-entry A8 Excel wrapper is peeled");
+        assertArrayEquals(
+                ole,
+                wrappedExcelResult.getBytes(),
+                "wrapped Excel OLE bytes");
+        assertEquals(
+                "application/vnd.ms-excel",
+                wrappedExcelResult.getContentType(),
+                "wrapped Excel OLE MIME type");
+        assertEquals(
+                ".xls",
+                wrappedExcelResult.getSuggestedExtension(),
+                "wrapped Excel OLE output extension");
+
+        Result wrappedEtResult = unpacker.unpack(
+                new ByteArrayInputStream(wrappedOle),
+                wrappedOle.length,
+                1024L,
+                "application/octet-stream",
+                "budget.et");
+        assertEquals(
+                ".xls",
+                wrappedEtResult.getSuggestedExtension(),
+                "ET filename supplies the spreadsheet-family hint");
+
+        Method outputFileName = FilezContentController.class.getDeclaredMethod(
+                "outputFileName", String.class, String.class);
+        outputFileName.setAccessible(true);
+        assertEquals(
+                "budget.xls",
+                outputFileName.invoke(null, "budget.xlsx", ".xls"),
+                "download filename replaces an XLSX suffix after conversion");
+        assertEquals(
+                "budget.xls",
+                outputFileName.invoke(null, "budget.et", ".xls"),
+                "download filename replaces an ET suffix after conversion");
 
         boolean bounded = false;
         try {
@@ -265,13 +375,72 @@ public final class FilezCoreSmokeTest {
         FilezRuntimeConfig runtime = new FilezRuntimeConfig();
         runtime.setConfigManager(TestConfigManager.create(values, writes));
 
+        FacadePolicy defaultPolicy = runtime.loadFacadePolicy();
+        assertTrue(
+                defaultPolicy.isEnabled(),
+                "a fresh installation defaults to enabled");
+        assertEquals(
+                FilezRuntimeConfig.MODE_VIEW,
+                defaultPolicy.getMode(),
+                "a fresh installation defaults to view");
+        Snapshot defaultView = runtime.loadValidated();
+        assertEquals(
+                FilezRuntimeConfig.LEGACY_CATEGORY,
+                defaultView.getSourceCategory(),
+                "the default view may reuse complete legacy connections");
+
+        FilezRuntimeConfig unavailable = new FilezRuntimeConfig();
+        assertEquals(
+                FilezRuntimeConfig.MODE_OFF,
+                unavailable.getEffectiveFacadeMode(),
+                "a missing configuration service still fails closed");
+
+        String enabledKey = TestConfigManager.key(
+                FilezRuntimeConfig.CATEGORY, FilezRuntimeConfig.ENABLED);
+        String modeKey = TestConfigManager.key(
+                FilezRuntimeConfig.CATEGORY, FilezRuntimeConfig.FACADE_MODE);
+
+        values.put(enabledKey, "true");
+        values.remove(modeKey);
         assertEquals(
                 FilezRuntimeConfig.MODE_OFF,
                 runtime.getEffectiveFacadeMode(),
-                "legacy connection values cannot enable the facade");
-        assertLoadRejected(
-                runtime,
-                "legacy connection values alone are rejected");
+                "a missing mode cannot use the default view");
+
+        values.remove(enabledKey);
+        values.put(modeKey, FilezRuntimeConfig.MODE_VIEW);
+        assertEquals(
+                FilezRuntimeConfig.MODE_OFF,
+                runtime.getEffectiveFacadeMode(),
+                "a missing enabled value cannot use the default view");
+
+        values.put(enabledKey, " ");
+        values.put(modeKey, FilezRuntimeConfig.MODE_VIEW);
+        assertEquals(
+                FilezRuntimeConfig.MODE_OFF,
+                runtime.getEffectiveFacadeMode(),
+                "a blank enabled value fails closed");
+
+        values.put(enabledKey, "true");
+        values.put(modeKey, " ");
+        assertEquals(
+                FilezRuntimeConfig.MODE_OFF,
+                runtime.getEffectiveFacadeMode(),
+                "a blank mode fails closed");
+
+        putPolicy(values, "false", FilezRuntimeConfig.MODE_OFF);
+        FacadePolicy disabled = runtime.loadFacadePolicy();
+        assertFalse(disabled.isEnabled(), "an explicit disable is preserved");
+        assertEquals(
+                FilezRuntimeConfig.MODE_OFF,
+                disabled.getMode(),
+                "an explicit disable remains off");
+
+        putPolicy(values, "false", FilezRuntimeConfig.MODE_VIEW);
+        assertEquals(
+                FilezRuntimeConfig.MODE_OFF,
+                runtime.getEffectiveFacadeMode(),
+                "enabled=false cannot be elevated by a stored view mode");
 
         putPolicy(values, "true", FilezRuntimeConfig.MODE_VIEW);
         Snapshot legacy = runtime.loadValidated();
@@ -279,6 +448,19 @@ public final class FilezCoreSmokeTest {
                 FilezRuntimeConfig.LEGACY_CATEGORY,
                 legacy.getSourceCategory(),
                 "policy-only new category still uses legacy connections");
+
+        putPolicy(values, "true", FilezRuntimeConfig.MODE_EDIT);
+        assertEquals(
+                FilezRuntimeConfig.MODE_EDIT,
+                runtime.getEffectiveFacadeMode(),
+                "an explicit edit policy is preserved");
+        assertTrue(
+                runtime.isEditEnabled(),
+                "edit policy authorizes the server-side edit services");
+        assertEquals(
+                FilezRuntimeConfig.LEGACY_CATEGORY,
+                runtime.loadValidated().getSourceCategory(),
+                "edit mode may reuse the complete legacy connection settings");
 
         putPolicy(values, "TRUE", FilezRuntimeConfig.MODE_VIEW);
         assertEquals(
@@ -438,6 +620,19 @@ public final class FilezCoreSmokeTest {
                 FilezRuntimeConfig.MODE_VIEW,
                 data.get("mode"),
                 "mode response");
+
+        Map<String, Object> edit = new LinkedHashMap<String, Object>();
+        edit.put("enabled", Boolean.TRUE);
+        edit.put("mode", FilezRuntimeConfig.MODE_EDIT);
+        assertEquals(
+                "OK",
+                resultCode(manager.setFacadePolicy(edit)),
+                "admin can explicitly enable FileZ edit mode");
+        Map<?, ?> editData = (Map<?, ?>) manager.getFacadePolicy(null).get("data");
+        assertEquals(
+                FilezRuntimeConfig.MODE_EDIT,
+                editData.get("mode"),
+                "edit mode is returned by the administration API");
 
         Map<String, Object> disable = new LinkedHashMap<String, Object>();
         disable.put("enabled", Boolean.FALSE);
